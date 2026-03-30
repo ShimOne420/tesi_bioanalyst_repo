@@ -56,6 +56,26 @@ Questo comando:
 - usa lo script ufficiale gia presente nel progetto
 - evita errori di path nel terminale
 
+## Script utili mentre il download procede
+
+Per vedere cosa e gia comparso in `BioCube`:
+
+```bash
+python scripts/inventory_biocube.py
+```
+
+Per cercare automaticamente i candidati per:
+
+- species
+- temperature
+- precipitation
+
+usa:
+
+```bash
+python scripts/locate_minimum_indicator_sources.py
+```
+
 ## Comando consigliato per il download reale
 
 ```bash
