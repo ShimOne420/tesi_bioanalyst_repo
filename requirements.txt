@@ -1,0 +1,9 @@
+pandas
+numpy
+xarray
+pyarrow
+matplotlib
+seaborn
+jupyter
+openpyxl
+python-dotenv
