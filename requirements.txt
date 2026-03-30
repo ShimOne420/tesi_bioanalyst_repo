@@ -1,6 +1,7 @@
 pandas
 numpy
 xarray
+netCDF4
 pyarrow
 matplotlib
 seaborn
