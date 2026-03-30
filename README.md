@@ -85,6 +85,20 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
+## Comando utile per BioCube
+
+Per pianificare o scaricare `BioCube` usando automaticamente i path del progetto:
+
+```bash
+python scripts/biocube_download.py
+```
+
+Per il download reale:
+
+```bash
+python scripts/biocube_download.py --download
+```
+
 ## Regola di collaborazione
 
 Su `GitHub` vanno:
