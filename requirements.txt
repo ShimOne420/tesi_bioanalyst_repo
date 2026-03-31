@@ -9,3 +9,5 @@ jupyter
 openpyxl
 python-dotenv
 huggingface_hub
+fastapi
+uvicorn

@@ -12,6 +12,7 @@ import xarray as xr
 from dotenv import load_dotenv
 
 
+# Leggiamo un path dal `.env` e verifichiamo che esista davvero.
 def require_path(env_name: str) -> Path:
     value = os.getenv(env_name)
     if not value:
@@ -22,6 +23,7 @@ def require_path(env_name: str) -> Path:
     return path
 
 
+# Definiamo gli argomenti CLI per scegliere quale sorgente ispezionare.
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Mostra un campione dei dati minimi usati per i 3 indicatori."
@@ -41,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# Mostriamo un estratto tabellare del parquet specie e il suo intervallo temporale.
 def show_species_sample(species_path: Path, rows: int) -> None:
     df = pd.read_parquet(species_path)
     print("=== SPECIES ===")
@@ -53,6 +56,7 @@ def show_species_sample(species_path: Path, rows: int) -> None:
     print()
 
 
+# Ispezioniamo metadati e primo timestep del dataset di temperatura.
 def show_temperature_sample(temperature_path: Path) -> None:
     ds = xr.open_dataset(temperature_path)
     da = ds["t2m"]
@@ -70,6 +74,7 @@ def show_temperature_sample(temperature_path: Path) -> None:
     ds.close()
 
 
+# Ispezioniamo metadati e primo timestep del dataset di precipitazione.
 def show_precipitation_sample(precipitation_path: Path) -> None:
     ds = xr.open_dataset(precipitation_path)
     da = ds["tp"]
@@ -87,6 +92,7 @@ def show_precipitation_sample(precipitation_path: Path) -> None:
     ds.close()
 
 
+# Carichiamo i path dal progetto e mostriamo la/le sorgente/i richieste.
 def main() -> None:
     args = build_parser().parse_args()
     project_root = Path(__file__).resolve().parents[1]
@@ -117,5 +123,6 @@ def main() -> None:
         show_precipitation_sample(precipitation_path)
 
 
+# Rendiamo lo script eseguibile da terminale.
 if __name__ == "__main__":
     main()

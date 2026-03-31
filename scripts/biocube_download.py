@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
+# Definiamo gli argomenti CLI per dry-run, download reale e filtri sui moduli da scaricare.
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Wrapper locale per pianificare o scaricare BioCube usando BIOCUBE_DIR da .env."
@@ -44,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# Carichiamo il path di destinazione da `.env` e richiamiamo il downloader originale del repo.
 def main() -> int:
     project_root = Path(__file__).resolve().parents[1]
     repo_root = project_root.parents[1]
@@ -86,5 +88,6 @@ def main() -> int:
     return result.returncode
 
 
+# Rendiamo lo script eseguibile da terminale.
 if __name__ == "__main__":
     raise SystemExit(main())

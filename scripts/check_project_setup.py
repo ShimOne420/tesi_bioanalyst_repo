@@ -6,6 +6,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
+# Controlliamo un singolo path letto dal file `.env`.
 def check_path(label: str, raw_value: str | None) -> tuple[bool, str]:
     if not raw_value:
         return False, f"{label}: variabile non impostata"
@@ -15,6 +16,7 @@ def check_path(label: str, raw_value: str | None) -> tuple[bool, str]:
     return False, f"{label}: path non trovato -> {path}"
 
 
+# Verifichiamo che il progetto punti davvero a dataset, modello e cartella output corretti.
 def main() -> int:
     project_root = Path(__file__).resolve().parents[1]
     env_path = project_root / ".env"
@@ -46,5 +48,6 @@ def main() -> int:
     return 1
 
 
+# Rendiamo lo script eseguibile da terminale.
 if __name__ == "__main__":
     raise SystemExit(main())

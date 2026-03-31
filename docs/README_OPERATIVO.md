@@ -1,315 +1,215 @@
 # README Operativo
 
-Questa guida serve per usare il progetto da sola in `Visual Studio Code` e per capire, in modo chiaro, cosa contiene ogni file principale del repository.
+Questa guida serve per usare il progetto in `Visual Studio Code` con la struttura minima davvero utile.
 
-## 1. Obiettivo del progetto
+## 1. Obiettivo reale del progetto
 
-In questa fase la tesi ha un obiettivo operativo molto preciso:
+Il progetto adesso ha questo flusso:
 
-- usare `BioCube` in locale;
-- verificare che il setup del progetto funzioni;
-- calcolare i `3 indicatori minimi`:
-  - `numero di specie`
-  - `temperatura media`
-  - `precipitazioni medie`
+1. capire i dati
+2. selezionare una città o un'area europea
+3. scegliere un periodo
+4. far dialogare `frontend locale` e `backend locale`
+5. ottenere gli indicatori mensili aggregati
+6. avere anche il dettaglio `cella + mese` sulla stessa area
 
-Per ora non stiamo facendo:
+Questo e gia coerente con lo step futuro di una piccola interfaccia web con mappa, anche se l'interfaccia non va implementata ora.
 
-- training del modello;
-- fine-tuning;
-- mappe finali complete;
-- integrazione con dataset esterni aggiuntivi.
+## 2. Dove stanno i dati
 
-## 2. Dove stanno le cose
-
-### Repository locale
-
-Questo e il codice del progetto:
+### Codice del progetto
 
 - [repo locale](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo)
 
-Qui vanno:
-
-- script Python
-- README
-- notebook
-- documentazione
-- file di configurazione
-
 ### Dataset e output pesanti
-
-Questi stanno fuori dal repo, sul disco esterno `Archivio`:
 
 - [BioCube](/Volumes/Archivio/biomap_thesis/data/biocube)
 - [modelli](/Volumes/Archivio/biomap_thesis/models/bioanalyst_pretrained)
-- [output pesanti](/Volumes/Archivio/biomap_thesis/outputs)
+- [output esterni](/Volumes/Archivio/biomap_thesis/outputs)
 
-Questo serve a non riempire il Mac e a non mettere dati enormi su GitHub.
+## 3. File che servono davvero
 
-## 3. Cosa contiene ogni file e cartella
-
-### File principali in root
+### Root
 
 - [README.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/README.md)
-  File principale del progetto. Spiega obiettivo, setup e scelta metodologica iniziale.
-
 - [CONTRIBUTING.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/CONTRIBUTING.md)
-  Regole di collaborazione per lavorare in piu persone con GitHub.
-
 - [requirements.txt](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/requirements.txt)
-  Elenco delle librerie Python necessarie. Ora include anche `netCDF4`, che serve per leggere i file `.nc`.
-
 - [.env.example](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/.env.example)
-  Esempio di configurazione dei path locali.
-
-- [.env](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/.env)
-  Configurazione reale del tuo computer. Non va su GitHub.
-
 - [.gitignore](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/.gitignore)
-  Dice a Git cosa non tracciare, per esempio `.venv`, dati pesanti e output locali.
 
-### Cartella `docs/`
-
-- [README_OPERATIVO.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/README_OPERATIVO.md)
-  Questa guida pratica.
-
-- [STRUTTURA_PROGETTO.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/STRUTTURA_PROGETTO.md)
-  Spiegazione sintetica della struttura del repository.
-
-- [SETUP_MAC_VSCODE.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/SETUP_MAC_VSCODE.md)
-  Note di setup per Mac e VS Code.
-
-- [STEP_02_DATASET_SETUP.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/STEP_02_DATASET_SETUP.md)
-  Note sul download e sul posizionamento di BioCube.
-
-- [ROADMAP_OPERATIVA_BIOANALYST.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/ROADMAP_OPERATIVA_BIOANALYST.md)
-  Documento di lavoro piu vicino alla roadmap complessiva della tesi.
-
-### Cartella `scripts/`
+### Script essenziali
 
 - [activate_project.sh](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/activate_project.sh)
-  Attiva il `venv` e carica le variabili del file `.env`.
+  attiva l'ambiente
 
 - [check_project_setup.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/check_project_setup.py)
-  Verifica che i path del progetto siano corretti.
+  controlla i path
 
 - [biocube_download.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/biocube_download.py)
-  Wrapper del downloader di BioCube. Usa automaticamente `BIOCUBE_DIR`.
+  gestisce il download di `BioCube`
 
 - [inventory_biocube.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/inventory_biocube.py)
-  Fa un inventario rapido del contenuto di BioCube.
+  ti dice cosa c'e nel dataset scaricato
 
-- [locate_minimum_indicator_sources.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/locate_minimum_indicator_sources.py)
-  Cerca i file candidati per i tre indicatori minimi.
+- [view_minimum_sources.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/view_minimum_sources.py)
+  mostra campioni e metadati delle sorgenti minime
 
-- [species_indicator_preview.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/species_indicator_preview.py)
-  Primo script reale per l'indicatore specie. Legge `europe_species.parquet` e crea un preview di `species richness`.
+- [minimum_indicator_utils.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/minimum_indicator_utils.py)
+  contiene la logica condivisa di ritaglio spaziale, filtri temporali, maschera terra ed export
 
-- [climate_indicator_preview.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/climate_indicator_preview.py)
-  Preview di temperatura e precipitazione. Usa `t2m` e `tp` dai file `Copernicus`.
+- [selected_area_indicators.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/selected_area_indicators.py)
+  script principale che accetta città, punto o bounding box e restituisce sia l'aggregato area/mese sia il dettaglio `cella + mese`
 
-### Cartella `notebooks/`
+### Backend locale
 
-- [README.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/notebooks/README.md)
-  Spiega a cosa serviranno i notebook.
+- [backend_api/main.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/backend_api/main.py)
+  backend FastAPI che espone `/api/health`, `/api/cities` e `/api/indicators`
 
-- [01_setup_check.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/notebooks/01_setup_check.md)
-  Nota iniziale sul controllo del setup.
+- [backend_api/README.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/backend_api/README.md)
+  guida rapida al backend locale
 
-### Cartelle `data/`, `models/`, `outputs/`
+### Frontend locale
 
-- [data/README.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/data/README.md)
-  Spiega che il dataset vero e proprio non va dentro il repository.
+- [web-ui](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/web-ui)
+  interfaccia locale Next.js con mappa, selezione città, selezione periodo e tabella risultati
 
-- [models/README.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/models/README.md)
-  Nota sui modelli e sui pesi.
+### Notebook
 
-- [outputs/README.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/outputs/README.md)
-  Spiega dove finiscono i risultati.
+- [01_dataset_exploration.ipynb](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/notebooks/01_dataset_exploration.ipynb)
+  notebook generico per visualizzare dataset e output cambiando solo il path del file nella cella di configurazione
 
-## 4. Decisione metodologica da capire bene
+## 4. Semantica degli indicatori
 
-Questa e la decisione che ti avevo anticipato.
+### Cella + mese
 
-### Caso A: Europa intera per mese
+Produce una riga per:
 
-Vuol dire:
+- `cella geografica`
+- `mese`
 
-- prendi un mese, per esempio `gennaio 2000`;
-- calcoli un solo valore medio per tutta l'Europa;
-- ripeti per tutti i mesi.
+con:
 
-Esempio:
+- `species_count_observed_cell`
+- `temperature_mean_c`
+- `precipitation_mean_mm`
 
-- `2000-01 -> temperatura media europea`
-- `2000-01 -> precipitazione media europea`
-- `2000-01 -> indicatore specie europeo`
+Nota importante:
 
-Questa strada e utile per:
+- `species_count_observed_cell` significa `numero di specie osservate in quella cella e in quel mese`
+- se e `NaN`, non vuol dire automaticamente assenza reale di specie; vuol dire che non risultano osservazioni in quel dato supporto
 
-- verificare che i dati siano corretti;
-- produrre una baseline semplice;
-- testare gli script.
+### Area + mese
 
-### Caso B: Cella spaziale + mese
+L'output aggregato sull'area selezionata usa:
 
-Vuol dire:
+- clima aggregato sull'area selezionata
+- specie osservate nell'area selezionata
 
-- il territorio e diviso in tante celle geografiche;
-- per ogni cella e per ogni mese calcoli il valore;
-- ottieni un dataset molto piu ricco, utile per fare mappe.
+Quindi e gia il mattoncino giusto per una futura interfaccia con:
 
-Esempio:
+- selezione di citta da una barra
+- selezione manuale di rettangoli sulla mappa
+- scelta di un periodo
+- restituzione degli indicatori in output
 
-- `lat, lon, 2000-01, temperatura`
-- `lat, lon, 2000-01, precipitazione`
-- `lat, lon, 2000-01, species richness`
+## 5. Comandi da usare in VS Code
 
-Questa strada e utile per:
-
-- mappe;
-- analisi spaziali;
-- hotspot;
-- damage/restoration.
-
-### Qual e la scelta giusta adesso
-
-Per questa fase la scelta consigliata e:
-
-1. fare prima `Europa intera per mese`
-2. poi passare a `cella + mese`
-
-Motivo:
-
-- ti permette di chiudere una pipeline funzionante in modo rapido;
-- rende molto piu facile il debug;
-- ti lascia una base solida prima della parte spaziale piu pesante.
-
-## 5. Comandi da eseguire in VS Code
-
-### Aprire il progetto
-
-1. apri `Visual Studio Code`
-2. fai `File -> Open Folder`
-3. seleziona:
-
-- [tesi_bioanalyst_repo](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo)
-
-4. apri il terminale integrato
-
-### Attivare l'ambiente
-
-Comando consigliato:
+### Setup iniziale
 
 ```bash
 source scripts/activate_project.sh
-```
-
-Questo comando:
-
-- attiva `.venv`
-- carica le variabili del file `.env`
-- prepara i path di dataset, modelli e output
-
-### Verificare il setup
-
-```bash
 python scripts/check_project_setup.py
-```
-
-### Verificare che BioCube sia presente
-
-```bash
 python scripts/inventory_biocube.py
 ```
 
-### Testare il primo indicatore: species
+### Avvio backend locale
+
+Nel primo terminale:
 
 ```bash
-python scripts/species_indicator_preview.py
+source scripts/activate_project.sh
+uvicorn backend_api.main:app --reload --port 8000
 ```
 
-### Visualizzare le sorgenti minime dal terminale
+### Avvio frontend locale
+
+Nel secondo terminale:
 
 ```bash
-python scripts/view_minimum_sources.py --source species --rows 5
-python scripts/view_minimum_sources.py --source temperature
-python scripts/view_minimum_sources.py --source precipitation
+cd web-ui
+npm install
+cp .env.local.example .env.local
+npm run dev
+```
+
+Poi apri:
+
+- [http://localhost:3000](http://localhost:3000)
+
+### Capire i dati
+
+```bash
 python scripts/view_minimum_sources.py --source all --rows 3
 ```
 
-### Testare i due indicatori climatici in modalita veloce
+### Città disponibili
 
 ```bash
-python scripts/climate_indicator_preview.py --max-steps 12
+python scripts/selected_area_indicators.py --list-cities
 ```
 
-### Eseguire il preview climatico completo
+### Query su città
 
 ```bash
-python scripts/climate_indicator_preview.py
+python scripts/selected_area_indicators.py --city milano --start 2000-01-01 --end 2000-12-01
 ```
 
-### Costruire la tabella Europa intera per mese
-
-Test veloce:
+Se vuoi allargare la finestra attorno alla città:
 
 ```bash
-python scripts/europe_month_indicators.py --max-steps 12
+python scripts/selected_area_indicators.py --city milano --half-window-deg 1.0 --start 2000-01-01 --end 2000-12-01
 ```
 
-Run completo:
+### Query su bounding box
+
+Questo è il caso che somiglia di più alla futura selezione rettangolare sulla mappa:
 
 ```bash
-python scripts/europe_month_indicators.py
+python scripts/selected_area_indicators.py --label nord_italia --min-lat 44 --max-lat 46 --min-lon 8 --max-lon 10 --start 2000-01-01 --end 2000-12-01
 ```
 
-Questo script esporta tre formati:
+### Query su punto libero
 
-- `europe_month_indicators.csv`
-  CSV standard, utile per script e pandas.
+```bash
+python scripts/selected_area_indicators.py --label test_point --lat 45.4642 --lon 9.19 --half-window-deg 0.5 --start 2000-01-01 --end 2000-12-01
+```
 
-- `europe_month_indicators_excel.csv`
-  CSV con separatore `;`, pensato per Excel in ambiente italiano.
+### Output prodotti
 
-- `europe_month_indicators.xlsx`
-  File Excel vero e proprio, il piu sicuro da aprire direttamente.
+Per ogni selezione l'output tipico è:
 
-### Aprire il notebook di visualizzazione
+- `selected_<label>_area_monthly.xlsx`
+- `selected_<label>_area_monthly.csv`
+- `selected_<label>_area_monthly_excel.csv`
+- `selected_<label>_cells.parquet`
 
-Apri in `VS Code` questo file:
+Questi file vengono prodotti dal backend Python locale e poi letti dalla UI tramite l'API FastAPI.
 
-- [02_europe_month_exploration.ipynb](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/notebooks/02_europe_month_exploration.ipynb)
+Nota importante:
 
-Poi esegui le celle una per una.
+- se `species_count_observed_area` e `NaN`, significa che in quell'area e in quel mese non risultano osservazioni specie nel dataset
+- in quel caso conviene ampliare la finestra con `--half-window-deg` oppure selezionare un'area più grande
 
-## 6. Dove guardare i risultati
+## 6. Sequenza consigliata
 
-Nel mio ambiente di test i risultati di preview sono finiti qui:
-
-- [outputs/local_preview](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/outputs/local_preview)
-
-In locale sul tuo Mac, quando il path esterno e scrivibile, gli output finali dovrebbero andare in:
-
-- [output esterni](/Volumes/Archivio/biomap_thesis/outputs)
-
-Se vuoi aprire il file con `Excel`, usa preferibilmente:
-
-- `europe_month_indicators.xlsx`
-  oppure
-- `europe_month_indicators_excel.csv`
-
-## 7. Sequenza consigliata per lavorare da sola
-
-Quando riapri il progetto, la sequenza migliore e:
+Quando riapri il progetto:
 
 1. `source scripts/activate_project.sh`
 2. `python scripts/check_project_setup.py`
-3. `python scripts/inventory_biocube.py`
-4. `python scripts/view_minimum_sources.py --source all --rows 3`
-5. `python scripts/species_indicator_preview.py`
-6. `python scripts/climate_indicator_preview.py --max-steps 12`
-7. `python scripts/europe_month_indicators.py --max-steps 12`
-8. apri `02_europe_month_exploration.ipynb` in VS Code
+3. `python scripts/view_minimum_sources.py --source all --rows 3`
+4. `uvicorn backend_api.main:app --reload --port 8000`
+5. `cd web-ui && npm install && cp .env.local.example .env.local && npm run dev`
+6. apri [http://localhost:3000](http://localhost:3000)
+7. seleziona una città o disegna un rettangolo sulla mappa
 
-Se questi passaggi funzionano, il setup del progetto e corretto e la pipeline `Europa intera per mese` e pronta.
+Se questi passaggi funzionano, la pipeline minima e pronta e puoi lavorare davvero su città, aree e periodi.

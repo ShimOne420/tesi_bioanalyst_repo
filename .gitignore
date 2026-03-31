@@ -9,3 +9,7 @@ data/raw/
 data/external/
 models/pretrained/
 outputs/
+web-ui/node_modules/
+web-ui/.next/
+web-ui/.vercel/
+web-ui/.env.local

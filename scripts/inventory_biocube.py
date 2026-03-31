@@ -7,6 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
+# Convertiamo una dimensione in byte in una stringa più leggibile.
 def human_size(num_bytes: int) -> str:
     units = ["B", "KB", "MB", "GB", "TB"]
     size = float(num_bytes)
@@ -17,6 +18,7 @@ def human_size(num_bytes: int) -> str:
     return f"{num_bytes} B"
 
 
+# Esploriamo velocemente la cartella locale di BioCube per capire cosa è stato scaricato davvero.
 def main() -> int:
     project_root = Path(__file__).resolve().parents[1]
     load_dotenv(project_root / ".env")
@@ -82,5 +84,6 @@ def main() -> int:
     return 0
 
 
+# Rendiamo lo script eseguibile da terminale.
 if __name__ == "__main__":
     raise SystemExit(main())
