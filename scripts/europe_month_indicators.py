@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Preview degli indicatori climatici minimi: temperatura e precipitazione."""
+"""Calcola i 3 indicatori minimi nel formato Europa intera per mese."""
 
 from __future__ import annotations
 
@@ -34,15 +34,30 @@ def require_path(env_name: str) -> Path:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Crea un preview leggero di temperatura media e precipitazione media."
+        description="Calcola i 3 indicatori minimi in formato Europa intera per mese."
     )
     parser.add_argument(
         "--max-steps",
         type=int,
         default=None,
-        help="Numero massimo di time step da processare per un test veloce.",
+        help="Numero massimo di mesi da processare per un test veloce.",
     )
     return parser
+
+
+def compute_species_monthly(species_path: Path, max_steps: int | None = None) -> pd.DataFrame:
+    df = pd.read_parquet(species_path, columns=["Species", "Timestamp"])
+    df["month"] = pd.to_datetime(df["Timestamp"]).dt.to_period("M").dt.to_timestamp()
+    monthly = (
+        df.groupby("month")["Species"]
+        .nunique()
+        .reset_index(name="species_count_europe")
+        .sort_values("month")
+    )
+    if max_steps is not None:
+        monthly = monthly.head(max_steps)
+    monthly["month"] = monthly["month"].dt.strftime("%Y-%m-%d")
+    return monthly
 
 
 def main() -> None:
@@ -52,6 +67,7 @@ def main() -> None:
     biocube_dir = require_path("BIOCUBE_DIR")
     output_dir = require_path("PROJECT_OUTPUT_DIR")
 
+    species_path = biocube_dir / "Species" / "europe_species.parquet"
     temperature_path = (
         biocube_dir
         / "Copernicus"
@@ -67,23 +83,25 @@ def main() -> None:
         / "era5-climate-energy-moisture-0.nc"
     )
 
+    species_monthly = compute_species_monthly(species_path, max_steps=args.max_steps)
+
     ds_temp = subset_europe(xr.open_dataset(temperature_path))
     ds_prec = subset_europe(xr.open_dataset(precipitation_path))
     land_mask = build_land_mask(ds_temp)
 
-    temp_df = compute_weighted_land_mean_series(
+    temperature_monthly = compute_weighted_land_mean_series(
         ds=ds_temp,
         var_name="t2m",
-        output_column="temperature_mean_c",
+        output_column="temperature_mean_europe_c",
         land_mask=land_mask,
         transform=lambda value: value - 273.15,
         max_steps=args.max_steps,
     )
 
-    prec_df = compute_weighted_land_mean_series(
+    precipitation_monthly = compute_weighted_land_mean_series(
         ds=ds_prec,
         var_name="tp",
-        output_column="precipitation_mean_mm",
+        output_column="precipitation_mean_europe_mm",
         land_mask=land_mask,
         transform=lambda value: value * 1000.0,
         max_steps=args.max_steps,
@@ -92,32 +110,37 @@ def main() -> None:
     ds_temp.close()
     ds_prec.close()
 
-    merged = temp_df.merge(prec_df, on="month", how="inner")
+    final_df = (
+        species_monthly
+        .merge(temperature_monthly, on="month", how="inner")
+        .merge(precipitation_monthly, on="month", how="inner")
+        .sort_values("month")
+    )
 
     summary = {
+        "mode": "europe_per_month",
+        "aggregation_region": "Europe bbox lat 30..75, lon -25..45, land-only, latitude-weighted",
+        "rows": int(len(final_df)),
+        "time_start": str(final_df["month"].min()),
+        "time_end": str(final_df["month"].max()),
+        "species_source": str(species_path),
         "temperature_source": str(temperature_path),
         "precipitation_source": str(precipitation_path),
-        "aggregation_region": "Europe bbox lat 30..75, lon -25..45, land-only, latitude-weighted",
-        "rows_preview": int(len(merged)),
-        "time_start": str(merged["month"].min()),
-        "time_end": str(merged["month"].max()),
-        "temperature_mean_c_global_mean": float(merged["temperature_mean_c"].mean()),
-        "temperature_mean_c_min": float(merged["temperature_mean_c"].min()),
-        "temperature_mean_c_max": float(merged["temperature_mean_c"].max()),
-        "precipitation_mean_mm_global_mean": float(merged["precipitation_mean_mm"].mean()),
-        "precipitation_mean_mm_min": float(merged["precipitation_mean_mm"].min()),
-        "precipitation_mean_mm_max": float(merged["precipitation_mean_mm"].max()),
+        "species_count_min": int(final_df["species_count_europe"].min()),
+        "species_count_max": int(final_df["species_count_europe"].max()),
+        "temperature_mean_c_global_mean": float(final_df["temperature_mean_europe_c"].mean()),
+        "precipitation_mean_mm_global_mean": float(final_df["precipitation_mean_europe_mm"].mean()),
     }
 
     output_paths, used_fallback = write_tabular_outputs(
         summary=summary,
-        table_df=merged,
-        stem="climate_indicators",
+        table_df=final_df,
+        stem="europe_month_indicators",
         output_dir=output_dir,
         project_root=PROJECT_ROOT,
     )
 
-    print("Climate indicator preview creato con successo.")
+    print("Pipeline Europa intera per mese completata.")
     print(pd.Series(summary).to_json(force_ascii=False, indent=2))
     print(f"\nSummary: {output_paths['summary']}")
     print(f"CSV: {output_paths['csv']}")

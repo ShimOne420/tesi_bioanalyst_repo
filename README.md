@@ -2,6 +2,10 @@
 
 Questo repository contiene il workspace operativo della tesi.
 
+Per una guida operativa piu dettagliata, con spiegazione di file, cartelle e comandi da usare in `Visual Studio Code`, vedi anche:
+
+- [docs/README_OPERATIVO.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/README_OPERATIVO.md)
+
 ## Obiettivo della fase corrente
 
 In questa prima fase il progetto serve a:
@@ -138,3 +142,59 @@ Il primo obiettivo pratico del progetto e:
 3. scaricare dataset e modello;
 4. leggere le variabili giuste;
 5. calcolare i 3 indicatori minimi.
+
+## Decisione metodologica da prendere
+
+Prima di costruire la pipeline finale bisogna decidere la `unita di analisi`.
+
+### Opzione A: Europa intera per mese
+
+Significa questo:
+
+- prendi ogni mese del dataset;
+- per quel mese calcoli `un solo valore finale` per tutta l'Europa;
+- quindi ottieni una tabella temporale del tipo:
+  - `2000-01 -> temperatura media Europa`
+  - `2000-01 -> precipitazione media Europa`
+  - `2000-01 -> indicatore specie Europa`
+
+Vantaggi:
+
+- e la versione piu semplice da implementare e verificare;
+- e ottima per testare che i dati siano giusti;
+- permette di costruire subito una baseline metodologica.
+
+Limiti:
+
+- non produce mappe;
+- non dice dove, nello spazio, avvengono i cambiamenti.
+
+### Opzione B: Cella spaziale + mese
+
+Significa questo:
+
+- il territorio europeo viene trattato come insieme di celle geografiche;
+- per ogni `cella` e per ogni `mese` calcoli il valore dell'indicatore;
+- quindi ottieni una tabella molto piu ricca del tipo:
+  - `latitudine, longitudine, mese, species_richness`
+  - `latitudine, longitudine, mese, temperatura_media`
+  - `latitudine, longitudine, mese, precipitazione_media`
+
+Vantaggi:
+
+- e la struttura giusta se in futuro vuoi fare mappe;
+- e la base corretta per analisi spaziali, hotspot, danno/restoration.
+
+Limiti:
+
+- e piu pesante da gestire;
+- richiede piu attenzione nel far combaciare le griglie spaziali dei dati.
+
+### Scelta consigliata adesso
+
+La scelta piu intelligente per questa fase e:
+
+1. partire con `Europa intera per mese` per validare il workflow;
+2. solo dopo passare a `cella + mese`, almeno su un sottoinsieme o su un'area di interesse.
+
+Questa scelta ti evita di complicare troppo la pipeline all'inizio, ma non ti chiude la strada alle mappe in seguito.
