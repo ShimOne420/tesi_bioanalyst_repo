@@ -19,6 +19,29 @@ function toMonthStart(value: string) {
   return `${value}-01`;
 }
 
+function enumerateMonths(minMonth: string, maxMonth: string) {
+  const values: string[] = [];
+  const cursor = new Date(`${minMonth}-01T00:00:00`);
+  const end = new Date(`${maxMonth}-01T00:00:00`);
+
+  while (cursor <= end) {
+    const year = cursor.getFullYear();
+    const month = String(cursor.getMonth() + 1).padStart(2, "0");
+    values.push(`${year}-${month}`);
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+
+  return values;
+}
+
+function formatMonthLabel(value: string) {
+  const date = new Date(`${value}-01T00:00:00`);
+  return new Intl.DateTimeFormat("it-IT", {
+    month: "long",
+    year: "numeric"
+  }).format(date);
+}
+
 function formatNumber(value: number | null, unit: string) {
   if (value === null || Number.isNaN(value)) {
     return "n.d.";
@@ -88,6 +111,14 @@ export function BiomapDashboard() {
 
     return buildBoundsFromCity(selectedCityConfig, halfWindowDeg);
   }, [halfWindowDeg, selectedCityConfig]);
+
+  const availableMonths = useMemo(() => {
+    if (!metadata) {
+      return [];
+    }
+
+    return enumerateMonths(metadata.period.minMonth, metadata.period.maxMonth);
+  }, [metadata]);
 
   const activeBounds = manualBounds ?? cityPreviewBounds;
 
@@ -212,26 +243,40 @@ export function BiomapDashboard() {
               <div className="field-row">
                 <div className="field-group">
                   <label htmlFor="start-month">Mese iniziale</label>
-                  <input
+                  <select
                     id="start-month"
-                    type="month"
-                    min={metadata?.period.minMonth}
-                    max={metadata?.period.maxMonth}
                     value={startMonth}
                     onChange={(event) => setStartMonth(event.target.value)}
-                  />
+                    disabled={!availableMonths.length}
+                  >
+                    {!availableMonths.length ? (
+                      <option value="">Caricamento periodo...</option>
+                    ) : null}
+                    {availableMonths.map((month) => (
+                      <option key={month} value={month}>
+                        {formatMonthLabel(month)}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <div className="field-group">
                   <label htmlFor="end-month">Mese finale</label>
-                  <input
+                  <select
                     id="end-month"
-                    type="month"
-                    min={metadata?.period.minMonth}
-                    max={metadata?.period.maxMonth}
                     value={endMonth}
                     onChange={(event) => setEndMonth(event.target.value)}
-                  />
+                    disabled={!availableMonths.length}
+                  >
+                    {!availableMonths.length ? (
+                      <option value="">Caricamento periodo...</option>
+                    ) : null}
+                    {availableMonths.map((month) => (
+                      <option key={month} value={month}>
+                        {formatMonthLabel(month)}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
@@ -261,6 +306,10 @@ export function BiomapDashboard() {
                 ) : (
                   "Seleziona una citta o un rettangolo sulla mappa."
                 )}
+                <br />
+                <br />
+                <strong>Periodo selezionato:</strong>{" "}
+                {startMonth && endMonth ? `${startMonth} → ${endMonth}` : "n.d."}
               </div>
 
               <div className="action-row">
@@ -346,6 +395,10 @@ export function BiomapDashboard() {
                   Tabella mensile dell&apos;area selezionata. Se l&apos;app e collegata al
                   backend locale o a un backend remoto, qui vedrai i dati reali; altrimenti
                   viene mostrata una demo trasparente.
+                </p>
+
+                <p className="small-note">
+                  Periodo effettivamente calcolato: {result.start.slice(0, 7)} → {result.end.slice(0, 7)}
                 </p>
 
                 {result.downloads ? (
