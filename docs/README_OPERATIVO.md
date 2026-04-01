@@ -213,5 +213,4 @@ Quando riapri il progetto:
 7. seleziona una città o disegna un rettangolo sulla mappa
 
 Se questi passaggi funzionano, la pipeline minima e pronta e puoi lavorare davvero su città, aree e periodi.
-hddal
-ggff
+
