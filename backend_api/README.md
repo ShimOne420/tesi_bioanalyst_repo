@@ -10,6 +10,7 @@ Il backend:
 - richiama [selected_area_indicators.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/selected_area_indicators.py)
 - legge gli output generati
 - restituisce JSON pronto per il frontend
+- espone anche il catalogo completo delle città europee a partire da [european_cities.json](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/data/european_cities.json)
 
 ## Endpoint
 

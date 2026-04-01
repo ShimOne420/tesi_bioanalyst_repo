@@ -212,6 +212,28 @@ python scripts/selected_area_indicators.py --city milano --half-window-deg 1.0 -
 python scripts/selected_area_indicators.py --min-lat 44 --max-lat 46 --min-lon 8 --max-lon 10 --start 2000-01-01 --end 2000-12-01
 ```
 
+### [generate_european_cities_catalog.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/generate_european_cities_catalog.py)
+
+Questo script genera il catalogo locale completo delle citta europee usato dalla UI e dal backend.
+
+**Cosa fa**
+
+- legge i dati dal pacchetto `geonamescache`
+- filtra i paesi con `continentcode = EU`
+- costruisce un file condiviso in [european_cities.json](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/data/european_cities.json)
+- ordina le citta per popolazione decrescente
+
+**Quando usarlo**
+
+- quando vuoi rigenerare il catalogo delle citta
+- quando aggiorni la sorgente dati del catalogo
+
+**Comando**
+
+```bash
+python scripts/generate_european_cities_catalog.py
+```
+
 Nota metodologica importante:
 
 - `species_count_observed_area` e `species_count_observed_cell` sono basati sulle osservazioni presenti nel dataset

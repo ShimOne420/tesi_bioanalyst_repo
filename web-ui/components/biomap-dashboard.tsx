@@ -51,7 +51,8 @@ function formatNumber(value: number | null, unit: string) {
 }
 
 export function BiomapDashboard() {
-  const [selectedCity, setSelectedCity] = useState<string>("milano");
+  const [selectedCity, setSelectedCity] = useState<string>("");
+  const [cityQuery, setCityQuery] = useState<string>("");
   const [halfWindowDeg, setHalfWindowDeg] = useState<number>(0.5);
   const [startMonth, setStartMonth] = useState<string>("");
   const [endMonth, setEndMonth] = useState<string>("");
@@ -79,6 +80,16 @@ export function BiomapDashboard() {
         setMetadata(payload);
         setStartMonth(payload.period.minMonth);
         setEndMonth(payload.period.maxMonth);
+
+        if (payload.cities.length) {
+          const defaultCity =
+            payload.cities.find(
+              (city) =>
+                city.label.toLowerCase() === "milano" || city.label.toLowerCase() === "milan"
+            ) ?? payload.cities[0];
+
+          setSelectedCity(defaultCity.value);
+        }
       } catch (metadataError) {
         if (cancelled) {
           return;
@@ -99,10 +110,38 @@ export function BiomapDashboard() {
     };
   }, []);
 
+  const cityOptions = metadata?.cities ?? CITY_OPTIONS;
+
+  useEffect(() => {
+    if (!selectedCity && cityOptions.length) {
+      setSelectedCity(cityOptions[0].value);
+    }
+  }, [cityOptions, selectedCity]);
+
   const selectedCityConfig = useMemo(
-    () => CITY_OPTIONS.find((city) => city.value === selectedCity) ?? null,
-    [selectedCity]
+    () => cityOptions.find((city) => city.value === selectedCity) ?? null,
+    [cityOptions, selectedCity]
   );
+
+  const filteredCityOptions = useMemo(() => {
+    const query = cityQuery.trim().toLowerCase();
+    const base = query
+      ? cityOptions.filter((city) =>
+          `${city.label} ${city.country}`.toLowerCase().includes(query)
+        )
+      : cityOptions;
+
+    if (!selectedCityConfig) {
+      return base.slice(0, 200);
+    }
+
+    const sliced = base.slice(0, 200);
+    if (sliced.some((city) => city.value === selectedCityConfig.value)) {
+      return sliced;
+    }
+
+    return [selectedCityConfig, ...sliced];
+  }, [cityOptions, cityQuery, selectedCityConfig]);
 
   const cityPreviewBounds = useMemo(() => {
     if (!selectedCityConfig) {
@@ -211,6 +250,13 @@ export function BiomapDashboard() {
             <div className="controls-grid">
               <div className="field-group">
                 <label htmlFor="city">Citta europea</label>
+                <input
+                  id="city-filter"
+                  type="text"
+                  placeholder="Filtra per citta o paese"
+                  value={cityQuery}
+                  onChange={(event) => setCityQuery(event.target.value)}
+                />
                 <select
                   id="city"
                   value={selectedCity}
@@ -218,13 +264,19 @@ export function BiomapDashboard() {
                     setSelectedCity(event.target.value);
                     setManualBounds(null);
                   }}
+                  disabled={!cityOptions.length}
                 >
-                  {CITY_OPTIONS.map((city) => (
+                  {filteredCityOptions.map((city) => (
                     <option key={city.value} value={city.value}>
                       {city.label} · {city.country}
                     </option>
                   ))}
                 </select>
+                <p className="small-note">
+                  {cityQuery.trim()
+                    ? `Filtro attivo: ${filteredCityOptions.length} risultati mostrati su ${cityOptions.length} citta.`
+                    : `${cityOptions.length} citta europee disponibili.`}
+                </p>
               </div>
 
               <div className="field-group">

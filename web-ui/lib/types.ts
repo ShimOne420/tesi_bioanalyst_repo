@@ -9,8 +9,10 @@ export type CityOption = {
   value: string;
   label: string;
   country: string;
+  countryCode?: string;
   lat: number;
   lon: number;
+  population?: number;
 };
 
 export type IndicatorRow = {

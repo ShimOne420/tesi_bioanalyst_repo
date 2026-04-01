@@ -11,3 +11,4 @@ python-dotenv
 huggingface_hub
 fastapi
 uvicorn
+geonamescache

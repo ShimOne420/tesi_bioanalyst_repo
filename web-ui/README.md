@@ -7,6 +7,7 @@ Questa cartella contiene l'interfaccia web pensata per `Vercel`.
 L'app permette di:
 
 - selezionare una citta europea da una barra di scelta
+- filtrare rapidamente migliaia di citta europee per nome o paese
 - definire un periodo mensile
 - disegnare manualmente un rettangolo sulla mappa d'Europa
 - inviare la selezione a un backend

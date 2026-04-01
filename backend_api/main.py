@@ -28,22 +28,8 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "local_preview"
+CITY_CATALOG_PATH = PROJECT_ROOT / "data" / "european_cities.json"
 load_dotenv(PROJECT_ROOT / ".env")
-
-
-# Manteniamo un catalogo locale semplice di città per la UI e per l'API.
-CITY_OPTIONS = [
-    {"value": "milano", "label": "Milano", "country": "Italia", "lat": 45.4642, "lon": 9.19},
-    {"value": "roma", "label": "Roma", "country": "Italia", "lat": 41.9028, "lon": 12.4964},
-    {"value": "parigi", "label": "Parigi", "country": "Francia", "lat": 48.8566, "lon": 2.3522},
-    {"value": "barcellona", "label": "Barcellona", "country": "Spagna", "lat": 41.3851, "lon": 2.1734},
-    {"value": "madrid", "label": "Madrid", "country": "Spagna", "lat": 40.4168, "lon": -3.7038},
-    {"value": "berlino", "label": "Berlino", "country": "Germania", "lat": 52.52, "lon": 13.405},
-    {"value": "amsterdam", "label": "Amsterdam", "country": "Paesi Bassi", "lat": 52.3676, "lon": 4.9041},
-    {"value": "lisbona", "label": "Lisbona", "country": "Portogallo", "lat": 38.7223, "lon": -9.1393},
-    {"value": "vienna", "label": "Vienna", "country": "Austria", "lat": 48.2082, "lon": 16.3738},
-    {"value": "varsavia", "label": "Varsavia", "country": "Polonia", "lat": 52.2297, "lon": 21.0122},
-]
 
 
 # Configuriamo l'app FastAPI con CORS locale per la UI Next.js su localhost.
@@ -78,6 +64,27 @@ def parse_int(value: str) -> int | None:
     if value == "":
         return None
     return int(float(value))
+
+
+# Carichiamo una sola volta il catalogo locale completo delle citta europee usato da backend e UI.
+@lru_cache(maxsize=1)
+def load_city_catalog() -> list[dict[str, Any]]:
+    if not CITY_CATALOG_PATH.exists():
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Catalogo citta non trovato. Esegui `python scripts/generate_european_cities_catalog.py` "
+                "per rigenerarlo."
+            ),
+        )
+
+    return json.loads(CITY_CATALOG_PATH.read_text(encoding="utf-8"))
+
+
+# Costruiamo anche un lookup per recuperare rapidamente coordinate e metadati di una citta selezionata.
+@lru_cache(maxsize=1)
+def load_city_lookup() -> dict[str, dict[str, Any]]:
+    return {city["value"]: city for city in load_city_catalog()}
 
 
 # Leggiamo il path del dataset dal file `.env` per usare i file reali di BioCube.
@@ -162,7 +169,7 @@ def get_dataset_metadata() -> dict[str, Any]:
                 "maxMonth": prec_max.strftime("%Y-%m"),
             },
         },
-        "cities": CITY_OPTIONS,
+        "cities": load_city_catalog(),
     }
 
 
@@ -224,7 +231,13 @@ def build_indicator_command(body: dict[str, Any]) -> tuple[list[str], str]:
         city = body.get("city")
         if not city:
             raise HTTPException(status_code=400, detail="Campo `city` mancante.")
-        cmd.extend(["--city", str(city)])
+
+        city_config = load_city_lookup().get(str(city))
+        if city_config is None:
+            raise HTTPException(status_code=400, detail="Città non trovata nel catalogo europeo.")
+
+        cmd.extend(["--lat", str(city_config["lat"])])
+        cmd.extend(["--lon", str(city_config["lon"])])
         cmd.extend(["--half-window-deg", str(body.get("halfWindowDeg", 0.5))])
     elif selection_mode == "bbox":
         bounds = body.get("bounds") or {}
@@ -281,7 +294,7 @@ def run_indicator_job(body: dict[str, Any]) -> dict[str, Any]:
         "status": "ok",
         "sourceMode": "local",
         "label": summary["label"],
-        "selectionMode": summary["selection_mode"],
+        "selectionMode": body.get("selectionMode", summary["selection_mode"]),
         "bounds": {
             "minLat": summary["bounds"]["min_lat"],
             "maxLat": summary["bounds"]["max_lat"],
@@ -309,7 +322,7 @@ def health() -> dict[str, str]:
 # Esporiamo l'elenco città per una futura UI completamente data-driven.
 @app.get("/api/cities")
 def list_cities() -> dict[str, list[dict[str, Any]]]:
-    return {"cities": CITY_OPTIONS}
+    return {"cities": load_city_catalog()}
 
 
 # Esporiamo il periodo realmente disponibile del dataset per popolare i selettori della UI.
