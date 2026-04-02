@@ -1,6 +1,59 @@
 # Modello BioAnalyst
 
-Stato documento: 2026-04-01
+Stato documento: 2026-04-02
+
+## Stato Reale Del Lavoro
+
+Questo e il punto di arresto sicuro del progetto al momento.
+
+### Completato
+
+- checkpoint ufficiale `small` scaricato in locale su `Archivio`;
+- path dei pesi mantenuto fuori da GitHub;
+- repository ufficiale `bfm-model` collegato localmente;
+- ambiente dedicato `.venv-bioanalyst` creato;
+- script di supporto modello creati;
+- adapter BIOMAP `forecast_area_indicators.py` impostato.
+- `pyarrow` installato nel venv modello;
+- primo smoke test locale completato con output salvati;
+- primo run one-step completo con `era5_pressure.nc` completato;
+- rollout completo a `+2 mesi` completato;
+- rollout completo a `+6 mesi` completato.
+
+### Preparato Ma Non Ancora Validato Scientificamente
+
+- interpretazione scientifica dei valori forecast;
+- validazione storica `forecast vs observed`;
+- verifica del motivo per cui alcuni output restano numericamente implausibili;
+- eventuale confronto `small vs large` dopo la validazione del flusso.
+
+### Ultimo Punto Di Arresto
+
+Prima di fermare il lavoro e stato corretto un bug reale del forecast:
+
+- il resolver citta del modulo modello usava la chiave sbagliata del catalogo europeo;
+- ora il codice legge correttamente `label` e `value`;
+- sono supportati anche alias CLI comuni come `milano -> milan`.
+
+Quindi il prossimo step non e piu "fix del catalogo citta" o "chiusura del blocco atmosferico", ma la validazione degli output.
+
+Aggiornamento ulteriore:
+
+- il primo test di inferenza e stato completato in modalita `--fast-smoke-test`;
+- il modello carica, esegue il forward e salva output;
+- il run one-step completo con blocco atmosferico reale e stato chiuso;
+- il rollout multi-step completo a `+2 mesi` e `+6 mesi` e stato chiuso.
+
+### Regola Di Lettura
+
+Questo README non dice che il forecast e gia concluso.
+
+Dice invece che:
+
+- la parte infrastrutturale e pronta;
+- il codice per il forecast esiste;
+- la prova controllata di inferenza esiste gia;
+- il prossimo passo giusto e validare e spiegare i risultati.
 
 ## Obiettivo di questo documento
 
@@ -13,6 +66,10 @@ I pesi non devono stare nel repository GitHub.
 Il path locale configurato oggi e:
 
 - `BIOANALYST_MODEL_DIR=/Volumes/Archivio/biomap_thesis/models/bioanalyst_pretrained`
+
+Al suo interno oggi e presente:
+
+- `bfm-pretrained-small.safetensors`
 
 Questa variabile e definita nel file `.env` locale del progetto.
 
@@ -28,6 +85,10 @@ Dalla repository ufficiale dei pesi risultano oggi disponibili:
 
 - `bfm-pretrained-small.safetensors` circa `781 MB`
 - `bfm-pretrain-large.safetensors` circa `2.84 GB`
+
+Verifica locale corrente:
+
+- checkpoint `small` presente in locale, circa `745 MB` scaricati
 
 ## Perche partire dal modello `small`
 
@@ -67,6 +128,19 @@ In breve:
 
 - `small` = checkpoint da usare adesso;
 - `large` = checkpoint da testare dopo, come upgrade.
+
+## Setup Locale Creato
+
+Il progetto contiene ora questi pezzi dedicati al modello:
+
+- [activate_bioanalyst_model.sh](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/activate_bioanalyst_model.sh)
+- [download_bioanalyst_weights.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/download_bioanalyst_weights.py)
+- [bioanalyst_model_utils.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/bioanalyst_model_utils.py)
+- [forecast_area_indicators.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/forecast_area_indicators.py)
+- [forecast_rollout_area_indicators.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/forecast_rollout_area_indicators.py)
+- repo ufficiale: [external/bfm-model](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/external/bfm-model)
+
+Questa struttura e gia sufficiente per ripartire dal test di inferenza senza dover ricostruire il setup.
 
 ## Stato reale dei dati: 2020 o 2025?
 
@@ -182,6 +256,18 @@ Output atteso:
 - checkpoint disponibile in locale;
 - codice ufficiale pronto per i test.
 
+### Stato fase 1
+
+`Chiusa`
+
+Motivo:
+
+- pesi `small` presenti;
+- repo ufficiale presente;
+- ambiente dedicato presente;
+- requisiti principali modello installati in un ambiente separato;
+- smoke test partito e andato oltre il caricamento dei dati.
+
 ### Fase 2 - Primo test di inferenza
 
 Obiettivo:
@@ -197,6 +283,18 @@ Step:
 Output atteso:
 
 - primo run documentato del modello in locale.
+
+### Stato fase 2
+
+`Chiusa`
+
+Motivo:
+
+- il modello viene caricato;
+- il forward one-step viene eseguito;
+- gli output vengono salvati su disco;
+- esiste un `forecast_summary.json` documentato;
+- esiste un run completo con blocco atmosferico reale.
 
 ### Fase 3 - Adattatore BIOMAP
 
@@ -215,6 +313,79 @@ Output atteso:
 
 - uno script intermedio tipo `forecast_area_indicators.py`.
 
+### Stato fase 3
+
+`Chiusa a livello tecnico`
+
+Motivo:
+
+- l'adapter esiste gia come [forecast_area_indicators.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/forecast_area_indicators.py);
+- il formato input parte gia da `city / bbox / periodo`;
+- il run effettivo del modello sopra questi input e stato eseguito con successo sia in modalita `--fast-smoke-test` sia in modalita completa;
+- restano aperti solo i perfezionamenti scientifici e non piu quelli architetturali di base.
+
+## Run Tecnici Completati
+
+Smoke test eseguito:
+
+```bash
+source /Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/activate_bioanalyst_model.sh
+python /Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/forecast_area_indicators.py --city milano --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu --fast-smoke-test
+```
+
+Output principali salvati in:
+
+- [forecast_area_indicators.csv](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/outputs/local_preview/model_forecast/milan_2019_12/forecast_area_indicators.csv)
+- [forecast_area_indicators.xlsx](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/outputs/local_preview/model_forecast/milan_2019_12/forecast_area_indicators.xlsx)
+- [forecast_summary.json](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/outputs/local_preview/model_forecast/milan_2019_12/forecast_summary.json)
+- [forecast_config.yaml](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/outputs/local_preview/model_forecast/milan_2019_12/forecast_config.yaml)
+
+Run completo one-step eseguito:
+
+```bash
+source /Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/activate_bioanalyst_model.sh
+python /Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/forecast_area_indicators.py --city milano --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu
+```
+
+Output principali:
+
+- [forecast_summary.json](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/outputs/local_preview/model_forecast/milan_2019_12/forecast_summary.json)
+- [forecast_area_indicators.xlsx](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/outputs/local_preview/model_forecast/milan_2019_12/forecast_area_indicators.xlsx)
+
+Run completo rollout `+6 mesi` eseguito:
+
+```bash
+source /Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/activate_bioanalyst_model.sh
+python /Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/forecast_rollout_area_indicators.py --city milano --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu --steps 6
+```
+
+Output principali:
+
+- [forecast_rollout_summary.json](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/outputs/local_preview/model_forecast/milan_2019_12_rollout_6m/forecast_rollout_summary.json)
+- [forecast_rollout_6m.xlsx](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/outputs/local_preview/model_forecast/milan_2019_12_rollout_6m/forecast_rollout_6m.xlsx)
+
+## Come Leggere Questi Risultati
+
+I run completati significano:
+
+- il setup modello e funzionante;
+- il caricamento checkpoint e funzionante;
+- l'adapter BIOMAP produce batch leggibili da `bfm-model`;
+- il modello esegue inferenza e salva output finali;
+- il rollout multi-step completo parte e termina senza crash.
+
+I run tecnici NON significano ancora:
+
+- che il forecast sia scientificamente affidabile;
+- che i valori numerici attuali siano gia interpretabili come risultato finale di tesi;
+- che il forecast sia gia pronto per essere esposto come conclusione automatica nell'interfaccia finale.
+
+In particolare, i valori attuali vanno considerati `solo di validazione tecnica`, perche:
+
+- anche i run completi mostrano ancora `missing_keys`;
+- il rollout `+6 mesi` restituisce valori non plausibili, per esempio temperatura costante intorno a `-109 °C` e precipitazione costante intorno a `48493 mm`;
+- quindi la pipeline e corretta come integrazione tecnica, ma non ancora come strumento scientifico pronto all'uso.
+
 ### Fase 4 - Forecast 6 e 12 mesi
 
 Obiettivo:
@@ -232,6 +403,27 @@ Output atteso:
 
 - tabella forecast scaricabile;
 - confronto `osservato vs previsto`.
+
+### Stato fase 4
+
+`Chiusa a livello tecnico per +2 e +6 mesi`
+
+Motivo:
+
+- esiste lo script [forecast_rollout_area_indicators.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/forecast_rollout_area_indicators.py);
+- il rollout completo con `era5_pressure.nc` e stato eseguito su `+2 mesi`;
+- il rollout completo con `era5_pressure.nc` e stato eseguito su `+6 mesi`;
+- gli output vengono salvati in formati coerenti con la UI.
+
+### Come ripartire dalla fase 4
+
+La parte tecnica della fase 4 e partita e si e chiusa.
+
+Il prossimo avanzamento utile della fase 4 e:
+
+1. produrre rollout a `+12 mesi`;
+2. confrontare `small` e `large` solo dopo la validazione del `small`;
+3. decidere se esporre in UI il forecast come modalita `beta` o tenerlo nascosto fino alla validazione scientifica.
 
 ### Fase 5 - Validazione storica
 
@@ -257,6 +449,62 @@ Output atteso:
 
 - una sezione di validazione nella tesi;
 - soglie di affidabilita per il report finale.
+
+## Problemi Trovati Fin Qui
+
+Questi sono i problemi reali emersi durante il setup:
+
+1. `dipendenze ufficiali pesanti`
+   Il repo ufficiale porta con se dipendenze non banali; per questo e stato creato un ambiente dedicato separato.
+
+2. `integrazione locale delicata`
+   Il codice ufficiale e pensato per un contesto di training/inferenza piu ampio del nostro, quindi serve una config locale adattata.
+
+3. `range dati non uniforme`
+   Il layer `species` arriva oltre il `2020`, ma i layer climatici minimi usati dal progetto attuale si fermano a `2020-12`.
+
+4. `forecast specie da interpretare con prudenza`
+   L'output specie del modello va trattato come proxy o segnale modellistico, non come misura osservata diretta.
+
+5. `pressione atmosferica ancora lenta`
+   Il file `era5_pressure.nc` e il collo di bottiglia principale del run completo. Per questo il primo test chiuso oggi usa la modalita `--fast-smoke-test`.
+
+## Prossimo Step Sicuro
+
+Quando vorrai riprendere, il primo comando sicuro da rieseguire e:
+
+```bash
+source /Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/activate_bioanalyst_model.sh
+```
+
+Subito dopo:
+
+```bash
+python -m py_compile /Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/bioanalyst_model_utils.py /Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/download_bioanalyst_weights.py /Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/forecast_area_indicators.py
+```
+
+Poi, come primo vero test controllato:
+
+```bash
+python /Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/forecast_area_indicators.py --city milano --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu
+```
+
+Per un test rapido e stabile gia validato:
+
+```bash
+python /Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/forecast_area_indicators.py --city milano --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu --fast-smoke-test
+```
+
+## Conclusione Operativa
+
+Il progetto modello non e fermo a zero.
+
+La parte giusta da dire e:
+
+- `setup completato in gran parte`;
+- `struttura forecast pronta`;
+- `smoke test locale chiuso`;
+- `resta da chiudere la modalita completa con input atmosferico reale`.
 
 ### Fase 6 - Integrazione in UI
 

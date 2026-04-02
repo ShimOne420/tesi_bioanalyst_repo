@@ -1,10 +1,12 @@
 .DS_Store
 .env
 .venv/
+.venv-bioanalyst/
 .cache/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+external/
 data/raw/
 data/external/
 models/pretrained/
