@@ -460,3 +460,47 @@ Nota pratica:
 
 - su CPU locale il rollout `+6 mesi` richiede diversi minuti, quindi e normale vedere lunghi intervalli senza log tra `[4/8]` e `[5/8]`
 - oggi i forecast prodotti mostrano ancora pattern sospetti, per esempio valori costanti mese su mese; la validazione di questi output appartiene alla fase 5 della roadmap
+
+### [forecast_backtest_one_step.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/forecast_backtest_one_step.py)
+
+Questo e lo script principale della fase 5.
+
+Cosa fa:
+
+- esegue forecast one-step su una o piu citta
+- confronta forecast e observed sul mese successivo reale
+- misura errori su temperatura, precipitazione e specie proxy
+- verifica che il roundtrip `raw -> scaled -> original` sia coerente
+- salva un report tabellare pronto per la tesi
+
+Perche e importante:
+
+- separa i bug della pipeline dai limiti del modello
+- rende la validazione ripetibile
+- permette di decidere se e quando portare il forecast nella UI
+
+Stato attuale:
+
+- testato su `Milano` e `Madrid`
+- roundtrip corretto (`MAE = 0`) dopo il fix locale dello scaling
+- conferma che il modello `small` tende ancora a sovrastimare soprattutto la parte specie
+
+Comando tipico:
+
+```bash
+source scripts/activate_bioanalyst_model.sh
+python scripts/forecast_backtest_one_step.py --cities milano madrid --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu
+```
+
+Output prodotti:
+
+- `forecast_backtest_one_step.csv`
+- `forecast_backtest_one_step_excel.csv`
+- `forecast_backtest_one_step.xlsx`
+- `forecast_backtest_summary.json`
+- `forecast_backtest_details.json`
+
+Nota pratica:
+
+- questo script e il modo piu pulito per proseguire la fase 5
+- se vuoi aggiungere nuove citta, basta estendere `--cities`

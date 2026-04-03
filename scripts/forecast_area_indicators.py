@@ -34,6 +34,8 @@ from bioanalyst_model_utils import (
     resolve_selection,
     resolve_source_paths,
     resolve_torch_device,
+    raw_dict_to_batch,
+    rescale_batch_correct,
     save_window_batches,
     slugify,
     summarize_batch_for_area,
@@ -200,10 +202,16 @@ def main() -> None:
     print("[5/7] Inferenza completata", flush=True)
 
     # Riportiamo batch predetto e batch osservato nello spazio originale per avere output leggibili.
-    predicted_batch_original = dataset.scale_batch(detach_batch(predicted_batch_scaled), direction="original")
-    observed_batch_original = (
-        dataset.scale_batch(y_batch_scaled, direction="original") if y_batch_scaled is not None else None
+    predicted_batch_original = rescale_batch_correct(
+        detach_batch(predicted_batch_scaled),
+        scaling_statistics=dataset.scaling_statistics,
+        mode=cfg.data.scaling.mode,
+        direction="original",
     )
+    observed_batch_original = None
+    if y_batch_scaled is not None and "target_window" in saved_windows:
+        raw_target = torch.load(saved_windows["target_window"], map_location="cpu", weights_only=False)
+        observed_batch_original = ensure_batched_batch(raw_dict_to_batch(raw_target))
     print("[6/7] Batch riportati nello spazio originale", flush=True)
 
     # Aggreghiamo il forecast sull'area selezionata per ottenere indicatori finali leggibili.

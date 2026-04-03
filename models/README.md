@@ -138,6 +138,7 @@ Il progetto contiene ora questi pezzi dedicati al modello:
 - [bioanalyst_model_utils.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/bioanalyst_model_utils.py)
 - [forecast_area_indicators.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/forecast_area_indicators.py)
 - [forecast_rollout_area_indicators.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/forecast_rollout_area_indicators.py)
+- [forecast_backtest_one_step.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/forecast_backtest_one_step.py)
 - repo ufficiale: [external/bfm-model](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/external/bfm-model)
 
 Questa struttura e gia sufficiente per ripartire dal test di inferenza senza dover ricostruire il setup.
@@ -499,12 +500,29 @@ python /Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bio
 
 Il progetto modello non e fermo a zero.
 
-La parte giusta da dire e:
+La parte giusta da dire oggi e:
 
-- `setup completato in gran parte`;
-- `struttura forecast pronta`;
-- `smoke test locale chiuso`;
-- `resta da chiudere la modalita completa con input atmosferico reale`.
+- `setup completato`;
+- `one-step completo chiuso`;
+- `rollout +2 mesi e +6 mesi chiusi a livello tecnico`;
+- `fase 5 diagnostica avviata con fix locali gia applicati`;
+- `resta aperta la validazione scientifica, non piu il setup tecnico`.
+
+## Aggiornamento Fase 5
+
+La fase 5 ha gia chiarito tre punti molto importanti:
+
+1. il dataset osservato non e il problema principale;
+2. esistevano due bug locali reali:
+   - inversione errata dello scaling
+   - media areale pesata con denominatore sbagliato
+3. dopo questi fix, il forecast e molto piu leggibile, ma resta ancora impreciso soprattutto sulla parte specie.
+
+Risultati salvati:
+
+- [forecast_backtest_one_step.xlsx](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/outputs/local_preview/model_forecast/phase5_backtest_milano_madrid/forecast_backtest_one_step.xlsx)
+- [forecast_backtest_details.json](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/outputs/local_preview/model_forecast/phase5_backtest_milano_madrid/forecast_backtest_details.json)
+- [PHASE_5_FINDINGS.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/PHASE_5_FINDINGS.md)
 
 ### Fase 6 - Integrazione in UI
 
@@ -558,8 +576,8 @@ La strategia migliore per BIOMAP e:
 
 Ordine consigliato dei prossimi passi:
 
-1. completare il download del checkpoint `small`;
-2. testare il caricamento del modello;
-3. fare un primo `one-step prediction`;
-4. progettare lo script `forecast_area_indicators.py`;
-5. passare poi a `6-month` e `12-month rollout`.
+1. estendere il backtesting one-step ad altre città europee;
+2. testare più finestre temporali, non solo `2019 -> 2020-01`;
+3. chiarire il ruolo dei `missing_keys` residui;
+4. valutare se il checkpoint `large` migliora davvero il backtest;
+5. portare il forecast in UI solo dopo una baseline convincente.

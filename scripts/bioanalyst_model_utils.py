@@ -17,6 +17,7 @@ import os
 import re
 import sys
 import unicodedata
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
@@ -164,6 +165,39 @@ def ensure_bfm_repo_on_path() -> None:
     repo_path = str(BFM_REPO_ROOT)
     if repo_path not in sys.path:
         sys.path.insert(0, repo_path)
+
+
+# Convertiamo un raw dict `.pt` nel NamedTuple `Batch` usato dal repo ufficiale.
+def raw_dict_to_batch(raw_batch: dict):
+    ensure_bfm_repo_on_path()
+    from bfm_model.bfm.dataloader_monthly import Batch, Metadata, normalize_keys
+
+    metadata = raw_batch["batch_metadata"]
+    batch_metadata = Metadata(
+        latitudes=torch.tensor(metadata["latitudes"], dtype=torch.float32),
+        longitudes=torch.tensor(metadata["longitudes"], dtype=torch.float32),
+        timestamp=metadata["timestamp"],
+        lead_time=(pd.Timestamp(metadata["timestamp"][1]).year - pd.Timestamp(metadata["timestamp"][0]).year) * 12
+        + (pd.Timestamp(metadata["timestamp"][1]).month - pd.Timestamp(metadata["timestamp"][0]).month)
+        + 1,
+        pressure_levels=metadata["pressure_levels"],
+        species_list=metadata["species_list"],
+    )
+
+    return Batch(
+        batch_metadata=batch_metadata,
+        surface_variables=raw_batch["surface_variables"],
+        edaphic_variables=raw_batch["edaphic_variables"],
+        atmospheric_variables=raw_batch["atmospheric_variables"],
+        climate_variables=raw_batch["climate_variables"],
+        species_variables=normalize_keys(raw_batch["species_variables"]),
+        vegetation_variables=raw_batch["vegetation_variables"],
+        land_variables=raw_batch["land_variables"],
+        agriculture_variables=raw_batch["agriculture_variables"],
+        forest_variables=raw_batch["forest_variables"],
+        redlist_variables=raw_batch["redlist_variables"],
+        misc_variables=raw_batch["misc_variables"],
+    )
 
 
 # Leggiamo il catalogo città completo e lo indicizziamo per nome in minuscolo.
@@ -636,6 +670,106 @@ def build_bfm_model_from_cfg(cfg):
     )
 
 
+# Applichiamo lo stesso schema di scaling del repo ufficiale, ma con l'inversione corretta.
+def _rescale_recursive_correct(
+    obj,
+    stats: dict,
+    dimensions_to_keep_by_key: dict | list | None = None,
+    mode: str = "normalize",
+    direction: str = "scaled",
+):
+    dimensions_to_keep_by_key = dimensions_to_keep_by_key or {}
+
+    if isinstance(obj, torch.Tensor):
+        if not stats:
+            return obj
+
+        mean_val = stats["mean"]
+        std_val = stats["std"]
+        min_val = stats["min"]
+        max_val = stats["max"]
+
+        if dimensions_to_keep_by_key:
+            if not isinstance(dimensions_to_keep_by_key, list) or len(dimensions_to_keep_by_key) != 1:
+                raise ValueError(f"dimensions_to_keep_by_key non valido: {dimensions_to_keep_by_key}")
+            dim_to_keep = dimensions_to_keep_by_key[0]
+            split_count = obj.shape[dim_to_keep]
+            chunks = torch.chunk(obj, chunks=split_count, dim=dim_to_keep)
+
+            if not isinstance(mean_val, (list, tuple)):
+                mean_val = [mean_val] * split_count
+                std_val = [std_val] * split_count
+                min_val = [min_val] * split_count
+                max_val = [max_val] * split_count
+
+            if mode == "standardize":
+                if direction == "scaled":
+                    changed = [(chunks[i] - mean_val[i]) / std_val[i] for i in range(split_count)]
+                else:
+                    changed = [chunks[i] * std_val[i] + mean_val[i] for i in range(split_count)]
+            elif mode == "normalize":
+                if direction == "scaled":
+                    changed = [(chunks[i] - min_val[i]) / (max_val[i] - min_val[i]) for i in range(split_count)]
+                else:
+                    changed = [chunks[i] * (max_val[i] - min_val[i]) + min_val[i] for i in range(split_count)]
+            else:
+                raise ValueError(f"Modalità scaling non supportata: {mode}")
+
+            return torch.cat(changed, dim=dim_to_keep)
+
+        if mode == "standardize":
+            if direction == "scaled":
+                return (obj - mean_val) / std_val
+            return obj * std_val + mean_val
+
+        if mode == "normalize":
+            if direction == "scaled":
+                return (obj - min_val) / (max_val - min_val)
+            return obj * (max_val - min_val) + min_val
+
+        raise ValueError(f"Modalità scaling non supportata: {mode}")
+
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key not in {"batch_metadata", "metadata"}:
+                obj[key] = _rescale_recursive_correct(
+                    value,
+                    stats.get(str(key), {}),
+                    dimensions_to_keep_by_key.get(str(key), {}),
+                    mode=mode,
+                    direction=direction,
+                )
+        return obj
+
+    return obj
+
+
+# Convertiamo un Batch o dict tra spazio scalato e spazio originale senza usare l'inversione buggata del repo esterno.
+def rescale_batch_correct(batch, scaling_statistics: dict, mode: str = "normalize", direction: str = "original"):
+    ensure_bfm_repo_on_path()
+    from bfm_model.bfm.dataloader_monthly import Batch
+    from bfm_model.bfm.scaler import dimensions_to_keep_monthly
+
+    convert_to_batch = False
+    if isinstance(batch, Batch):
+        payload = deepcopy(batch._asdict())
+        convert_to_batch = True
+    else:
+        payload = deepcopy(batch)
+
+    _rescale_recursive_correct(
+        payload,
+        scaling_statistics,
+        dimensions_to_keep_by_key=dimensions_to_keep_monthly,
+        mode=mode,
+        direction=direction,
+    )
+
+    if convert_to_batch:
+        return Batch(**payload)
+    return payload
+
+
 # Scegliamo il device locale più robusto: CPU di default, MPS opzionale, mai CUDA su Mac.
 def resolve_torch_device(device_request: str) -> torch.device:
     if device_request == "cpu":
@@ -686,9 +820,11 @@ def summarize_batch_for_area(batch, bounds: dict[str, float], species_threshold:
         if species_signal >= species_threshold:
             species_present += 1
 
+    weights_2d = np.broadcast_to(weights, temperature.shape)
+
     return {
-        "temperature_mean_area_c": float(np.nansum(temperature * weights) / np.nansum(weights)),
-        "precipitation_mean_area_mm": float(np.nansum(precipitation * weights) / np.nansum(weights)),
+        "temperature_mean_area_c": float(np.nansum(temperature * weights_2d) / np.nansum(weights_2d)),
+        "precipitation_mean_area_mm": float(np.nansum(precipitation * weights_2d) / np.nansum(weights_2d)),
         "species_count_area_proxy": int(species_present),
         "max_species_signal_area": float(max(max_species_signal) if max_species_signal else 0.0),
         "cell_count_land_proxy": int(lat_mask.sum() * lon_mask.sum()),

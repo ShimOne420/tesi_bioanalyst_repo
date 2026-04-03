@@ -34,6 +34,7 @@ from bioanalyst_model_utils import (
     resolve_selection,
     resolve_source_paths,
     resolve_torch_device,
+    rescale_batch_correct,
     save_window_batches,
     shift_month,
     slugify,
@@ -244,7 +245,12 @@ def main() -> None:
 
     # Riportiamo ogni batch predetto nello spazio originale e costruiamo la tabella forecast.
     rollout_batches_original = [
-        dataset.scale_batch(detach_batch(batch), direction="original")
+        rescale_batch_correct(
+            detach_batch(batch),
+            scaling_statistics=dataset.scaling_statistics,
+            mode=cfg.data.scaling.mode,
+            direction="original",
+        )
         for batch in rollout_batches_scaled
     ]
     rollout_frame = build_rollout_frame(

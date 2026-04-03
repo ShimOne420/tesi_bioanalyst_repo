@@ -46,6 +46,7 @@ Per la parte modello, invece, vedi il README dedicato:
 Per una guida pratica completa, con spiegazione di file, cartelle e comandi da usare in `Visual Studio Code`, vedi:
 
 - [docs/README_OPERATIVO.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/README_OPERATIVO.md)
+- [docs/PHASE_5_FINDINGS.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/PHASE_5_FINDINGS.md)
 
 ## Obiettivo
 
@@ -65,14 +66,15 @@ Il sottosistema `BioAnalyst` oggi va letto cosi:
 - `fase 2` primo test di inferenza: chiusa anche in modalita completa con blocco atmosferico reale;
 - `fase 3` adapter BIOMAP: chiusa a livello tecnico;
 - `fase 4` rollout forecast: avviata e chiusa a livello tecnico su `+2 mesi` e `+6 mesi`;
-- `fase 5` validazione scientifica: ancora aperta.
+- `fase 5` diagnostica e backtesting iniziale: avviata, con fix locali gia applicati;
+- `fase 5` validazione scientifica estesa: ancora aperta.
 
 In pratica:
 
 - i file e gli script ci sono;
 - la documentazione c'e;
 - il modello ha gia completato run completi one-step e rollout;
-- il prossimo passo sicuro e validare i risultati, non piu chiudere il setup.
+- il prossimo passo sicuro e ampliare il backtesting, non piu chiudere il setup.
 
 ## Flusso di lavoro attuale
 
@@ -138,6 +140,7 @@ Output principali gia generati:
 - [forecast_area_indicators.xlsx](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/outputs/local_preview/model_forecast/milan_2019_12/forecast_area_indicators.xlsx)
 - [forecast_rollout_summary.json](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/outputs/local_preview/model_forecast/milan_2019_12_rollout_6m/forecast_rollout_summary.json)
 - [forecast_rollout_6m.xlsx](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/outputs/local_preview/model_forecast/milan_2019_12_rollout_6m/forecast_rollout_6m.xlsx)
+- [forecast_backtest_one_step.xlsx](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/outputs/local_preview/model_forecast/phase5_backtest_milano_madrid/forecast_backtest_one_step.xlsx)
 
 ## Note importanti
 
@@ -147,5 +150,6 @@ Output principali gia generati:
 - per `Excel`, usa preferibilmente i file `.xlsx` o i file `_excel.csv`
 - se la UI mostra solo il `2000`, quasi sempre hai una sessione vecchia di frontend o backend: chiudi i processi con `Ctrl + C` e riavviali
 - per il modello, la parte tecnica minima e chiusa, ma la validazione scientifica non lo e
-- i valori forecast oggi mostrano ancora segnali non plausibili, per esempio temperature costanti intorno a `-109 °C` e precipitazioni eccessive nel rollout `+6 mesi`
-- quindi questi output vanno usati come prova di integrazione tecnica, non ancora come evidenza scientifica finale
+- nella fase 5 sono stati trovati e corretti due bug locali: inversione dello scaling e media areale con denominatore errato
+- dopo questi fix, il confronto `forecast vs observed` e molto piu leggibile
+- il modello continua comunque a sovrastimare soprattutto la parte specie e va ancora validato prima di finire in UI come funzione utente
