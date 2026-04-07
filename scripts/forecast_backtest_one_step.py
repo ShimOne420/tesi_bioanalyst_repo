@@ -55,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start", default="2019-01-01", help="Mese iniziale osservato.")
     parser.add_argument("--end", default="2019-12-01", help="Mese finale osservato.")
     parser.add_argument("--checkpoint", choices=["small", "large"], default="small")
-    parser.add_argument("--device", choices=["auto", "cpu", "mps"], default="cpu")
+    parser.add_argument("--device", choices=["auto", "cpu", "cuda", "mps"], default="cpu")
     parser.add_argument("--half-window-deg", type=float, default=0.5)
     parser.add_argument("--species-threshold", type=float, default=0.5)
     return parser

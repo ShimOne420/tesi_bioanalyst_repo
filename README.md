@@ -4,7 +4,7 @@ Questo repository contiene il workspace operativo della tesi.
 
 ## Stato Corrente
 
-Stato aggiornato al `2026-04-02`.
+Stato aggiornato al `2026-04-03`.
 
 Al momento il progetto e diviso in due blocchi:
 
@@ -21,6 +21,9 @@ La situazione reale oggi e questa:
 - il test one-step completo con `era5_pressure.nc` e stato chiuso con successo;
 - il rollout completo a `+2 mesi` e `+6 mesi` e stato chiuso con successo;
 - i valori forecast ottenuti non sono ancora scientificamente interpretabili e vanno trattati come output tecnici da validare.
+- la pipeline osservativa e stata verificata su casi reali e oggi restituisce valori plausibili;
+- le osservazioni specie vengono allineate alla griglia ERA5 `0.25°` sia negli indicatori osservati sia nella rasterizzazione forecast.
+- il backtest forecast esteso su `Milano`, `Madrid`, `Vienna` e `Lisbona` conferma che il checkpoint `small` non e ancora abbastanza accurato per l'uso finale in UI.
 
 La fase attuale del progetto ha un blocco tecnico principale:
 
@@ -47,6 +50,9 @@ Per una guida pratica completa, con spiegazione di file, cartelle e comandi da u
 
 - [docs/README_OPERATIVO.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/README_OPERATIVO.md)
 - [docs/PHASE_5_FINDINGS.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/PHASE_5_FINDINGS.md)
+- [docs/VALIDAZIONE_FORECAST_CLIMA.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/VALIDAZIONE_FORECAST_CLIMA.md)
+- [docs/VALIDAZIONE_GPU_GRATUITA.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/VALIDAZIONE_GPU_GRATUITA.md)
+- [docs/PERCHE_FORECAST_NON_VALIDATO.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/PERCHE_FORECAST_NON_VALIDATO.md)
 
 ## Obiettivo
 
@@ -66,7 +72,7 @@ Il sottosistema `BioAnalyst` oggi va letto cosi:
 - `fase 2` primo test di inferenza: chiusa anche in modalita completa con blocco atmosferico reale;
 - `fase 3` adapter BIOMAP: chiusa a livello tecnico;
 - `fase 4` rollout forecast: avviata e chiusa a livello tecnico su `+2 mesi` e `+6 mesi`;
-- `fase 5` diagnostica e backtesting iniziale: avviata, con fix locali gia applicati;
+- `fase 5` diagnostica e backtesting iniziale: chiusa;
 - `fase 5` validazione scientifica estesa: ancora aperta.
 
 In pratica:
@@ -94,6 +100,8 @@ python scripts/inventory_biocube.py
 python scripts/view_minimum_sources.py --source all --rows 3
 python scripts/selected_area_indicators.py --list-cities
 python scripts/selected_area_indicators.py --city milano --start 2000-01-01 --end 2000-12-01
+python scripts/selected_area_indicators.py --city madrid --start 2000-06-01 --end 2000-06-01
+python scripts/selected_area_indicators.py --city milano --start 2018-01-01 --end 2019-12-01
 python scripts/selected_area_indicators.py --min-lat 44 --max-lat 46 --min-lon 8 --max-lon 10 --start 2000-01-01 --end 2000-12-01
 uvicorn backend_api.main:app --reload --port 8000
 ```
@@ -121,6 +129,35 @@ Il comando one-step completo e gia validato tecnicamente:
 ```bash
 python scripts/forecast_area_indicators.py --city milano --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu
 ```
+
+Il comando di backtest minimo oggi consigliato e:
+
+```bash
+python scripts/forecast_backtest_one_step.py --cities milano madrid --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu
+```
+
+Per una validazione piu eterogenea:
+
+```bash
+python scripts/forecast_backtest_one_step.py --cities milano madrid vienna lisbon --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu
+```
+
+Il comando dedicato alla validazione clima su molte citta o aree e questo:
+
+```bash
+python scripts/forecast_validate_climate.py --forecast-start 2019-01-01 --forecast-end 2019-12-01 --month-stride 1 --checkpoint small --device cuda
+python scripts/forecast_validate_climate.py --areas-json data/validation_non_urban_areas.json --forecast-start 2019-01-01 --forecast-end 2019-12-01 --month-stride 1 --checkpoint small --device cuda
+```
+
+Per leggere rapidamente il report finale:
+
+```bash
+python scripts/inspect_forecast_validation_report.py
+```
+
+Per una versione guidata direttamente su Colab:
+
+- [02_colab_gpu_validation.ipynb](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/notebooks/02_colab_gpu_validation.ipynb)
 
 Il comando smoke test storico resta questo:
 
@@ -151,5 +188,8 @@ Output principali gia generati:
 - se la UI mostra solo il `2000`, quasi sempre hai una sessione vecchia di frontend o backend: chiudi i processi con `Ctrl + C` e riavviali
 - per il modello, la parte tecnica minima e chiusa, ma la validazione scientifica non lo e
 - nella fase 5 sono stati trovati e corretti due bug locali: inversione dello scaling e media areale con denominatore errato
+- nella fase 5 e stato corretto anche l'allineamento spaziale delle specie sulla griglia ERA5 `0.25°`
 - dopo questi fix, il confronto `forecast vs observed` e molto piu leggibile
 - il modello continua comunque a sovrastimare soprattutto la parte specie e va ancora validato prima di finire in UI come funzione utente
+- oggi la decisione pratica e: `indicatori osservati pronti`, `forecast ancora in validazione`
+- il modello `large` non e ancora il prossimo passo operativo: la pipeline locale e oggi parametrizzata esplicitamente per il checkpoint `small`

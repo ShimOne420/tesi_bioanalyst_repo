@@ -23,6 +23,9 @@ Il blocco `BioAnalyst forecast` oggi e in questo stato:
 - il primo smoke test locale del modello e stato completato con output salvati;
 - il forecast one-step completo con `era5_pressure.nc` e stato eseguito con successo;
 - il rollout completo a `+2 mesi` e `+6 mesi` e stato eseguito con successo.
+- il backtest minimo su `Milano` e `Madrid` e stato eseguito;
+- il backtest esteso su `Milano`, `Madrid`, `Vienna` e `Lisbona` e stato eseguito;
+- la pipeline osservativa e stata ricontrollata con valori plausibili.
 
 Quindi i file forecast qui sotto non sono "teorici", ma vanno letti come:
 
@@ -31,6 +34,11 @@ Quindi i file forecast qui sotto non sono "teorici", ma vanno letti come:
 - `one-step completo chiuso`
 - `rollout multi-step chiuso a livello tecnico`
 - `validazione scientifica ancora aperta`
+
+Conclusione pratica:
+
+- gli script osservativi sono pronti per alimentare backend e UI;
+- gli script forecast sono pronti per test interni, non ancora per output utente finali.
 
 ## Spiegazione dettagliata di ogni script
 
@@ -156,6 +164,8 @@ Nel concreto contiene:
 
 - il bounding box europeo standard del progetto
 - la normalizzazione delle longitudini
+- la costante della griglia ERA5 `0.25°`
+- lo snapping di coordinate puntuali alla griglia ERA5
 - il ritaglio del dataset sull'Europa
 - la costruzione della maschera terra
 - i filtri temporali mensili per `DataFrame` e `xarray`
@@ -208,6 +218,110 @@ Indicatori che restituisce:
 
 - `species_count_observed_area`
 - `temperature_mean_area_c`
+
+### [bioanalyst_model_utils.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/bioanalyst_model_utils.py)
+
+Questo non e uno script da lanciare da solo.
+
+E il modulo comune del blocco forecast BioAnalyst.
+
+Cosa contiene:
+
+- risoluzione di citta, punti e bounding box
+- path dei file sorgente BioCube usati dal modello
+- costruzione dei batch `.pt` compatibili con `bfm-model`
+- snapping delle osservazioni specie alla griglia ERA5 `0.25°`
+- supporto a `cpu`, `mps` e `cuda`
+- funzioni di scaling e inverse-scaling
+- aggregazione area-level delle predizioni
+- scrittura coerente di `csv`, `excel_csv`, `xlsx` e `json`
+
+Perche e importante:
+
+- separa la logica del modello dagli script eseguibili
+- rende piu semplice validare il forecast senza duplicare codice
+- e il punto centrale da cui dipendono `forecast_area_indicators.py`, `forecast_backtest_one_step.py`, `forecast_rollout_area_indicators.py` e `forecast_validate_climate.py`
+
+### [forecast_validate_climate.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/forecast_validate_climate.py)
+
+Questo e lo script principale per la validazione scientifica del forecast clima.
+
+Cosa fa:
+
+- esegue backtest `one-step` su molte citta o aree
+- valida solo `temperatura` e `precipitazione`
+- salva sia tabella `caso per caso` sia tabella `riassuntiva per citta`
+- misura errori assoluti e percentuali robuste
+
+Metriche chiave:
+
+- `temperature_abs_error_c`
+- `temperature_pct_error_kelvin`
+- `precipitation_abs_error_mm`
+- `precipitation_pct_error`
+- `precipitation_smape_pct`
+
+Regola pass/fail:
+
+- temperatura valida solo se passa sia la soglia percentuale sia la soglia assoluta
+- precipitazione valida solo se passa sia la soglia percentuale sia la soglia assoluta
+
+Quando usarlo:
+
+- quando vuoi capire se il checkpoint `small` e abbastanza credibile sul clima
+- prima di provare a validare anche la parte specie
+
+Esempi:
+
+```bash
+python scripts/forecast_validate_climate.py --forecast-start 2019-01-01 --forecast-end 2019-12-01 --month-stride 1 --checkpoint small --device cuda
+python scripts/forecast_validate_climate.py --areas-json data/validation_non_urban_areas.json --forecast-start 2019-01-01 --forecast-end 2019-12-01 --month-stride 1 --checkpoint small --device cuda
+```
+
+### [inspect_forecast_validation_report.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/inspect_forecast_validation_report.py)
+
+Serve per leggere rapidamente un run di validazione gia terminato.
+
+Cosa fa:
+
+- trova l'ultimo report disponibile oppure legge una cartella run specifica
+- apre il `summary.json` e le tabelle `xlsx/csv`
+- mostra da terminale migliori e peggiori citta o aree
+- salva un report Markdown gia pronto nella cartella del run
+
+Quando usarlo:
+
+- subito dopo che un test GPU e terminato
+- quando vuoi capire senza aprire a mano tutti gli Excel se il run e andato bene
+
+Esempi:
+
+```bash
+python scripts/inspect_forecast_validation_report.py
+python scripts/inspect_forecast_validation_report.py --run-dir /Volumes/Archivio/biomap_thesis/outputs/model_forecast/nome_run
+```
+
+### [prepare_colab_validation_subset.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/prepare_colab_validation_subset.py)
+
+Serve per preparare il subset minimo del progetto da portare su Colab o su un'altra GPU gratuita.
+
+Cosa copia:
+
+- i file BioCube minimi necessari al modello
+- il checkpoint `small`
+- una cartella `outputs`
+- un `manifest.json` finale
+
+Quando usarlo:
+
+- prima di spostare la validazione su Colab
+- quando vuoi evitare di copiare l'intero BioCube
+
+Esempio:
+
+```bash
+python scripts/prepare_colab_validation_subset.py --target-dir /percorso/del/tuo/staging_colab --clean
+```
 - `precipitation_mean_area_mm`
 - e, nel parquet per cella:
   `species_count_observed_cell`, `temperature_mean_c`, `precipitation_mean_mm`
@@ -217,6 +331,11 @@ Perche e il file giusto per il futuro:
 - una UI su `Vercel` potra passargli una citta o un rettangolo selezionato sulla mappa
 - la logica dei dati restera gia pronta
 - non serve duplicare backend diversi per citta, aree o celle
+
+Nota metodologica importante:
+
+- le osservazioni specie vengono allineate alla griglia ERA5 `0.25°` prima del merge con il clima
+- questo riduce errori spaziali tra coordinate puntuali e celle climatiche
 
 Output principali:
 
@@ -230,6 +349,8 @@ Comandi tipici:
 ```bash
 python scripts/selected_area_indicators.py --list-cities
 python scripts/selected_area_indicators.py --city milano --start 2000-01-01 --end 2000-12-01
+python scripts/selected_area_indicators.py --city madrid --start 2000-06-01 --end 2000-06-01
+python scripts/selected_area_indicators.py --city milano --start 2018-01-01 --end 2019-12-01
 python scripts/selected_area_indicators.py --city milano --half-window-deg 1.0 --start 2000-01-01 --end 2000-12-01
 python scripts/selected_area_indicators.py --min-lat 44 --max-lat 46 --min-lon 8 --max-lon 10 --start 2000-01-01 --end 2000-12-01
 ```
@@ -313,6 +434,30 @@ python scripts/download_bioanalyst_weights.py --checkpoint small
 python scripts/download_bioanalyst_weights.py --list
 ```
 
+### [prepare_colab_validation_subset.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/prepare_colab_validation_subset.py)
+
+Prepara un subset minimo del progetto da portare su `Google Colab` o su un'altra GPU gratuita.
+
+Cosa fa:
+
+- copia solo i file BioCube minimi necessari al forecast;
+- copia il checkpoint `small`;
+- prepara una cartella `outputs`;
+- scrive un `manifest.json` finale.
+
+Perche e utile:
+
+- evita di spostare tutto BioCube;
+- rende la validazione GPU molto piu leggera;
+- mantiene il workflow integrato con il progetto esistente.
+
+Comando tipico:
+
+```bash
+source scripts/activate_bioanalyst_model.sh
+python scripts/prepare_colab_validation_subset.py --target-dir /percorso/del/tuo/staging_colab --clean
+```
+
 ### [bioanalyst_model_utils.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/bioanalyst_model_utils.py)
 
 Questo file non va lanciato direttamente.
@@ -366,6 +511,7 @@ Stato attuale:
 - il run `--fast-smoke-test` e stato eseguito con successo
 - la modalita completa con blocco atmosferico reale e stata eseguita con successo
 - il bug sul catalogo citta del modulo forecast e gia stato corretto
+- il modello resta ancora troppo aggressivo per essere esposto in UI come funzione finale
 
 Comando tipico:
 
@@ -492,6 +638,12 @@ source scripts/activate_bioanalyst_model.sh
 python scripts/forecast_backtest_one_step.py --cities milano madrid --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu
 ```
 
+Comando esteso usato per il test eterogeneo:
+
+```bash
+python scripts/forecast_backtest_one_step.py --cities milano madrid vienna lisbon --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu
+```
+
 Output prodotti:
 
 - `forecast_backtest_one_step.csv`
@@ -504,3 +656,62 @@ Nota pratica:
 
 - questo script e il modo piu pulito per proseguire la fase 5
 - se vuoi aggiungere nuove citta, basta estendere `--cities`
+
+### [forecast_validate_climate.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/forecast_validate_climate.py)
+
+Questo e lo script dedicato alla validazione scientifica del forecast `clima`, separato dalla parte specie.
+
+Cosa fa:
+
+- esegue molti backtest `one-step` su piu citta e piu mesi;
+- supporta anche aree custom non urbane tramite `--areas-json`;
+- usa sempre la stessa logica ufficiale a `2 timesteps` del modello;
+- misura errori di temperatura e precipitazione con metriche piu stabili;
+- salva sia i casi singoli sia un riassunto per citta.
+
+Perche e utile:
+
+- evita di giudicare il modello solo su `Milano` o `Madrid`;
+- permette di testare un set piu eterogeneo di condizioni climatiche;
+- aiuta a capire se il checkpoint `small` e recuperabile almeno sul blocco clima.
+
+Metriche principali:
+
+- `temperature_abs_error_c`
+- `temperature_pct_error_kelvin`
+- `precipitation_abs_error_mm`
+- `precipitation_pct_error`
+- `precipitation_smape_pct`
+
+Comandi tipici:
+
+```bash
+source scripts/activate_bioanalyst_model.sh
+python scripts/forecast_validate_climate.py --forecast-start 2019-01-01 --forecast-end 2019-12-01 --month-stride 1 --checkpoint small --device cpu
+```
+
+```bash
+python scripts/forecast_validate_climate.py --forecast-start 2000-03-01 --forecast-end 2020-12-01 --month-stride 3 --checkpoint small --device cpu
+```
+
+Comando su aree non urbane:
+
+```bash
+python scripts/forecast_validate_climate.py --areas-json data/validation_non_urban_areas.json --forecast-start 2019-01-01 --forecast-end 2019-12-01 --month-stride 1 --checkpoint small --device cpu
+```
+
+Output prodotti:
+
+- `forecast_validation_climate_cases.csv`
+- `forecast_validation_climate_cases_excel.csv`
+- `forecast_validation_climate_cases.xlsx`
+- `forecast_validation_climate_city_summary.csv`
+- `forecast_validation_climate_city_summary_excel.csv`
+- `forecast_validation_climate_city_summary.xlsx`
+- `forecast_validation_climate_summary.json`
+
+Nota pratica:
+
+- `month-stride 1` usa tutti i mesi e puo richiedere molto tempo;
+- `month-stride 3` e una versione piu leggera, utile per una prima validazione sul periodo 2000-2020;
+- la specie non entra ancora nel giudizio finale di questo script: qui validiamo solo il forecast clima.

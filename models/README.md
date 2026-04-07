@@ -1,6 +1,6 @@
 # Modello BioAnalyst
 
-Stato documento: 2026-04-02
+Stato documento: 2026-04-03
 
 ## Stato Reale Del Lavoro
 
@@ -19,6 +19,9 @@ Questo e il punto di arresto sicuro del progetto al momento.
 - primo run one-step completo con `era5_pressure.nc` completato;
 - rollout completo a `+2 mesi` completato;
 - rollout completo a `+6 mesi` completato.
+- validazione osservativa ricontrollata con valori plausibili.
+- backtest minimo one-step su `Milano` e `Madrid` rieseguito e documentato.
+- backtest esteso su `Milano`, `Madrid`, `Vienna` e `Lisbona` completato.
 
 ### Preparato Ma Non Ancora Validato Scientificamente
 
@@ -54,6 +57,12 @@ Dice invece che:
 - il codice per il forecast esiste;
 - la prova controllata di inferenza esiste gia;
 - il prossimo passo giusto e validare e spiegare i risultati.
+- oggi la conclusione pratica e: `observed pipeline` pronta per la UI, `forecast pipeline` ancora no.
+
+Importante:
+
+- oggi la pipeline locale e costruita in modo coerente con il checkpoint `small`
+- il passaggio a `large` richiede una parametrizzazione dedicata della config, non un semplice cambio di file `.safetensors`
 
 ## Obiettivo di questo documento
 
@@ -142,6 +151,16 @@ Il progetto contiene ora questi pezzi dedicati al modello:
 - repo ufficiale: [external/bfm-model](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/external/bfm-model)
 
 Questa struttura e gia sufficiente per ripartire dal test di inferenza senza dover ricostruire il setup.
+
+Per la validazione clima vera e propria del forecast sono ora disponibili anche:
+
+- [forecast_validate_climate.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/forecast_validate_climate.py)
+- [inspect_forecast_validation_report.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/inspect_forecast_validation_report.py)
+- [prepare_colab_validation_subset.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/prepare_colab_validation_subset.py)
+- [VALIDAZIONE_FORECAST_CLIMA.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/VALIDAZIONE_FORECAST_CLIMA.md)
+- [VALIDAZIONE_GPU_GRATUITA.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/VALIDAZIONE_GPU_GRATUITA.md)
+- [PERCHE_FORECAST_NON_VALIDATO.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/PERCHE_FORECAST_NON_VALIDATO.md)
+- [02_colab_gpu_validation.ipynb](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/notebooks/02_colab_gpu_validation.ipynb)
 
 ## Stato reale dei dati: 2020 o 2025?
 

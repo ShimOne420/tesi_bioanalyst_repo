@@ -63,7 +63,7 @@ def build_parser():
     )
     parser.add_argument(
         "--device",
-        choices=["auto", "cpu", "mps"],
+        choices=["auto", "cpu", "cuda", "mps"],
         default="cpu",
         help="Device su cui eseguire l'inferenza locale.",
     )

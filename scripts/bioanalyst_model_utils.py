@@ -29,7 +29,12 @@ from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import OmegaConf
 
-from minimum_indicator_utils import build_bbox_from_point, normalize_longitude, resolve_output_base_dir
+from minimum_indicator_utils import (
+    build_bbox_from_point,
+    normalize_longitude,
+    resolve_output_base_dir,
+    snap_coordinates_to_grid,
+)
 
 
 # Risolviamo una volta sola la root del progetto e il repo ufficiale clonato localmente.
@@ -452,8 +457,10 @@ def build_species_group(species_path: Path, months: list[pd.Timestamp], latitude
     species_df["month"] = pd.to_datetime(species_df["Timestamp"]).dt.to_period("M").dt.to_timestamp()
     species_df = species_df[species_df["month"].isin(months)].copy()
     species_df["Species"] = species_df["Species"].astype(str)
-    species_df["Latitude"] = species_df["Latitude"].round(2)
-    species_df["Longitude"] = species_df["Longitude"].round(2)
+
+    # Allineiamo le osservazioni specie alla stessa griglia ERA5 0.25° usata dal modello.
+    species_df["Latitude"] = snap_coordinates_to_grid(species_df["Latitude"])
+    species_df["Longitude"] = snap_coordinates_to_grid(species_df["Longitude"])
 
     grouped = (
         species_df.groupby(["month", "Species", "Latitude", "Longitude"])
@@ -772,14 +779,25 @@ def rescale_batch_correct(batch, scaling_statistics: dict, mode: str = "normaliz
 
 # Scegliamo il device locale più robusto: CPU di default, MPS opzionale, mai CUDA su Mac.
 def resolve_torch_device(device_request: str) -> torch.device:
+    # Onoriamo esplicitamente la richiesta CPU.
     if device_request == "cpu":
         return torch.device("cpu")
+    # Supportiamo CUDA quando il runtime ha una GPU NVIDIA disponibile.
+    if device_request == "cuda":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        raise SystemExit("CUDA non disponibile su questa macchina.")
+    # Manteniamo il supporto MPS per il Mac locale.
     if device_request == "mps":
         if torch.backends.mps.is_available():
             return torch.device("mps")
         raise SystemExit("MPS non disponibile su questa macchina.")
-    if device_request == "auto" and torch.backends.mps.is_available():
-        return torch.device("mps")
+    # In modalita auto preferiamo prima CUDA, poi MPS, e solo dopo CPU.
+    if device_request == "auto":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if torch.backends.mps.is_available():
+            return torch.device("mps")
     return torch.device("cpu")
 
 

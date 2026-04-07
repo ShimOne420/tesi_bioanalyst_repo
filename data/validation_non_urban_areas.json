@@ -1,0 +1,44 @@
+[
+  {
+    "label": "central_pyrenees",
+    "min_lat": 42.45,
+    "max_lat": 43.15,
+    "min_lon": 0.20,
+    "max_lon": 1.40
+  },
+  {
+    "label": "tirol_alps",
+    "min_lat": 46.75,
+    "max_lat": 47.35,
+    "min_lon": 10.45,
+    "max_lon": 11.55
+  },
+  {
+    "label": "scottish_highlands",
+    "min_lat": 57.00,
+    "max_lat": 57.80,
+    "min_lon": -4.90,
+    "max_lon": -3.60
+  },
+  {
+    "label": "boreal_sweden",
+    "min_lat": 63.80,
+    "max_lat": 64.60,
+    "min_lon": 18.40,
+    "max_lon": 19.60
+  },
+  {
+    "label": "danube_delta",
+    "min_lat": 44.80,
+    "max_lat": 45.45,
+    "min_lon": 28.70,
+    "max_lon": 29.55
+  },
+  {
+    "label": "sardinia_interior",
+    "min_lat": 39.75,
+    "max_lat": 40.45,
+    "min_lon": 8.85,
+    "max_lon": 9.75
+  }
+]

@@ -27,6 +27,10 @@ EUROPE_BOUNDS = {
 }
 
 
+# Manteniamo esplicita la risoluzione spaziale ERA5 usata per clima e merge cella-per-cella.
+ERA5_GRID_DEGREES = 0.25
+
+
 # Normalizziamo le longitudini nel range [-180, 180] per lavorare sempre con coordinate coerenti.
 def normalize_longitude(ds: xr.Dataset) -> xr.Dataset:
     longitude = (((ds.longitude + 180) % 360) - 180)
@@ -115,6 +119,14 @@ def build_bbox_from_point(lat: float, lon: float, half_window_deg: float = 0.125
         "min_lon": lon - half_window_deg,
         "max_lon": lon + half_window_deg,
     }
+
+
+# Allineiamo coordinate puntuali alla griglia ERA5 per evitare merge spaziali incoerenti.
+def snap_coordinates_to_grid(
+    values: pd.Series,
+    grid_step: float = ERA5_GRID_DEGREES,
+) -> pd.Series:
+    return ((values / grid_step).round() * grid_step).round(2)
 
 
 # Ritagliamo un dataset xarray su un bounding box arbitrario.

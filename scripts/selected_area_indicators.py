@@ -31,6 +31,7 @@ from minimum_indicator_utils import (
     filter_dataframe_month_range,
     filter_dataset_month_range,
     resolve_output_base_dir,
+    snap_coordinates_to_grid,
     subset_bbox,
     subset_europe,
     write_tabular_outputs,
@@ -209,6 +210,12 @@ def compute_species_cell_month(
         columns=["Species", "Latitude", "Longitude", "Timestamp"],
     )
     df = df.rename(columns={"Latitude": "latitude", "Longitude": "longitude"})
+
+    # Allineiamo le osservazioni specie alla griglia ERA5 0.25° prima del filtro e del merge.
+    df["latitude"] = snap_coordinates_to_grid(df["latitude"])
+    df["longitude"] = snap_coordinates_to_grid(df["longitude"])
+
+    # Filtriamo solo le osservazioni che, una volta snapate, ricadono nell'area selezionata.
     df = df[
         (df["latitude"] >= bounds["min_lat"])
         & (df["latitude"] <= bounds["max_lat"])
@@ -354,6 +361,7 @@ def load_climate_datasets(
     end: str,
     max_steps: int | None,
 ) -> tuple[xr.Dataset, xr.Dataset, xr.DataArray]:
+    # Apriamo, normalizziamo, filtriamo nel tempo e ritagliamo il dataset temperatura.
     ds_temp = subset_bbox(
         filter_dataset_month_range(
             subset_europe(xr.open_dataset(source_paths["temperature"])),
@@ -363,6 +371,8 @@ def load_climate_datasets(
         ),
         bounds=bounds,
     )
+
+    # Applichiamo la stessa pipeline a precipitazione per mantenere le due griglie allineate.
     ds_prec = subset_bbox(
         filter_dataset_month_range(
             subset_europe(xr.open_dataset(source_paths["precipitation"])),
