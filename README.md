@@ -49,6 +49,7 @@ Per la parte modello, invece, vedi il README dedicato:
 Per una guida pratica completa, con spiegazione di file, cartelle e comandi da usare in `Visual Studio Code`, vedi:
 
 - [docs/README_OPERATIVO.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/README_OPERATIVO.md)
+- [docs/STRATEGIA_BRANCH_FORECAST.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/STRATEGIA_BRANCH_FORECAST.md)
 - [docs/PHASE_5_FINDINGS.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/PHASE_5_FINDINGS.md)
 - [docs/VALIDAZIONE_FORECAST_CLIMA.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/VALIDAZIONE_FORECAST_CLIMA.md)
 - [docs/VALIDAZIONE_GPU_GRATUITA.md](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/VALIDAZIONE_GPU_GRATUITA.md)

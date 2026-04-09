@@ -20,6 +20,7 @@ Questo e gia coerente con lo step futuro di una piccola interfaccia web con mapp
 ### Codice del progetto
 
 - [repo locale](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo)
+- [strategia branch forecast](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/docs/STRATEGIA_BRANCH_FORECAST.md)
 
 ### Dataset e output pesanti
 
@@ -213,4 +214,3 @@ Quando riapri il progetto:
 7. seleziona una città o disegna un rettangolo sulla mappa
 
 Se questi passaggi funzionano, la pipeline minima e pronta e puoi lavorare davvero su città, aree e periodi.
-
