@@ -37,9 +37,21 @@ from minimum_indicator_utils import (
 )
 
 
+def first_existing_path(*candidates: Path) -> Path:
+    """Restituisce il primo path esistente, altrimenti il primo candidato."""
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
 # Risolviamo una volta sola la root del progetto e il repo ufficiale clonato localmente.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-BFM_REPO_ROOT = PROJECT_ROOT / "external" / "bfm-model"
+SHARED_MAIN_ROOT = PROJECT_ROOT.parent / "tesi_bioanalyst_repo"
+BFM_REPO_ROOT = first_existing_path(
+    PROJECT_ROOT / "external" / "bfm-model",
+    SHARED_MAIN_ROOT / "external" / "bfm-model",
+)
 MODEL_CONFIG_DIR = BFM_REPO_ROOT / "bfm_model" / "bfm" / "configs"
 MODEL_BATCH_STATS_PATH = BFM_REPO_ROOT / "batch_statistics" / "monthly_batches_stats_splitted_channels.json"
 MODEL_LAND_MASK_PATH = BFM_REPO_ROOT / "batch_statistics" / "europe_Land_2020_grid.pkl"
@@ -919,4 +931,8 @@ def build_comparison_frame(
 
 # Carichiamo `.env` una volta sola prima di usare i path del progetto.
 def load_project_env() -> None:
-    load_dotenv(PROJECT_ROOT / ".env")
+    env_path = first_existing_path(
+        PROJECT_ROOT / ".env",
+        SHARED_MAIN_ROOT / ".env",
+    )
+    load_dotenv(env_path)
