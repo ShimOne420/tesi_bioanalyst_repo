@@ -14,15 +14,18 @@ L'aggregazione BIOMAP viene tenuta fuori da qui e vive in uno strato separato.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import torch
 
 from bioanalyst_model_utils import (
     BFM_REPO_ROOT,
     PROJECT_ROOT,
+    build_native_group_source_status,
     build_local_config,
     ensure_bfm_repo_on_path,
     load_project_env,
@@ -81,6 +84,27 @@ class NativeRolloutResult:
     checkpoint_diagnostics: dict[str, Any]
     saved_windows: dict[str, Path]
     forecast_months: list[pd.Timestamp]
+
+
+NATIVE_GROUP_FIELDS = {
+    "surface": "surface_variables",
+    "edaphic": "edaphic_variables",
+    "atmospheric": "atmospheric_variables",
+    "climate": "climate_variables",
+    "species": "species_variables",
+    "vegetation": "vegetation_variables",
+    "land": "land_variables",
+    "agriculture": "agriculture_variables",
+    "forest": "forest_variables",
+    "redlist": "redlist_variables",
+    "misc": "misc_variables",
+}
+
+
+DISPLAY_UNIT_RULES = {
+    "t2m": ("°C", lambda values: values - 273.15),
+    "tp": ("mm", lambda values: values * 1000.0),
+}
 
 
 def ensure_batched_batch(batch):
@@ -351,6 +375,9 @@ def save_native_one_step_artifacts(
         "native_prediction_original": str(predicted_path),
         "native_target_original": str(observed_path) if observed_path else None,
         "checkpoint_diagnostics": runtime.checkpoint_diagnostics,
+        "group_source_status": build_native_group_source_status(
+            use_atmospheric_data=bool(result.saved_windows.get("atmospheric_data_real", True))
+        ),
     }
     write_json(context.run_dir / "forecast_native_manifest.json", manifest)
     return {
@@ -393,6 +420,9 @@ def save_native_rollout_artifacts(
         "raw_batch_target": str(result.saved_windows["target_window"]) if "target_window" in result.saved_windows else None,
         "native_rollout_batches": [str(path) for path in batch_paths],
         "checkpoint_diagnostics": runtime.checkpoint_diagnostics,
+        "group_source_status": build_native_group_source_status(
+            use_atmospheric_data=bool(result.saved_windows.get("atmospheric_data_real", True))
+        ),
     }
     write_json(context.run_dir / "forecast_native_manifest.json", manifest)
     return {
@@ -415,4 +445,397 @@ def prepare_native_forecast_environment():
         "source_paths": source_paths,
         "project_root": PROJECT_ROOT,
         "bfm_repo_root": BFM_REPO_ROOT,
+    }
+
+
+def load_native_manifest(run_dir: Path) -> dict[str, Any]:
+    """Legge il manifest JSON di un run native."""
+    manifest_path = run_dir / "forecast_native_manifest.json"
+    if not manifest_path.exists():
+        raise SystemExit(f"Manifest non trovato: {manifest_path}")
+    return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+
+def load_native_batch_artifact(path: Path):
+    """Carica un batch salvato, supportando sia raw dict sia Batch già convertiti."""
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    if isinstance(payload, dict):
+        payload = raw_dict_to_batch(payload)
+    return ensure_batched_batch(payload)
+
+
+def flatten_batch_timestamps(batch) -> list[str]:
+    """Rende leggibili i timestamp del batch anche quando sono nested list."""
+    def flatten(value) -> list[str]:
+        if isinstance(value, (list, tuple)):
+            flattened = []
+            for item in value:
+                flattened.extend(flatten(item))
+            return flattened
+        return [str(value)]
+
+    return flatten(batch.batch_metadata.timestamp)
+
+
+def batch_lead_time_value(batch) -> float:
+    """Converte `lead_time` in float semplice per log e report."""
+    lead_time = batch.batch_metadata.lead_time
+    if hasattr(lead_time, "item"):
+        return float(lead_time.item())
+    return float(lead_time)
+
+
+def get_native_group(batch, group_name: str) -> dict[str, torch.Tensor]:
+    """Restituisce il gruppo richiesto dal batch con un nome semplice."""
+    field_name = NATIVE_GROUP_FIELDS[group_name]
+    return getattr(batch, field_name)
+
+
+def list_native_group_variables(batch) -> dict[str, list[str]]:
+    """Elenca i nomi delle variabili presenti in ciascun gruppo nativo."""
+    return {
+        group_name: sorted(get_native_group(batch, group_name).keys())
+        for group_name in NATIVE_GROUP_FIELDS
+        if len(get_native_group(batch, group_name)) > 0
+    }
+
+
+def list_native_group_counts(batch) -> dict[str, int]:
+    """Conta quante variabili sono presenti in ciascun gruppo nativo."""
+    return {
+        group_name: len(get_native_group(batch, group_name))
+        for group_name in NATIVE_GROUP_FIELDS
+        if len(get_native_group(batch, group_name)) > 0
+    }
+
+
+def extract_native_map(tensor: torch.Tensor, *, level_index: int = 0) -> np.ndarray:
+    """Estrae una mappa 2D leggibile dall'ultimo timestep disponibile."""
+    values = tensor.detach().cpu().numpy()
+    if values.ndim == 2:
+        return values.astype(np.float32)
+    if values.ndim == 3:
+        return values[-1].astype(np.float32)
+    if values.ndim == 4:
+        reduced = values[0] if values.shape[0] == 1 else values[-1]
+        if reduced.ndim == 3:
+            return reduced[-1].astype(np.float32)
+        return reduced.astype(np.float32)
+    if values.ndim == 5:
+        return values[0, -1, level_index].astype(np.float32)
+    raise SystemExit(f"Shape non supportata per una mappa 2D: {values.shape}")
+
+
+def convert_display_values(variable_name: str, values: np.ndarray) -> tuple[np.ndarray, str]:
+    """Converte alcune variabili note in unita più leggibili per grafici e report."""
+    if variable_name in DISPLAY_UNIT_RULES:
+        unit, rule = DISPLAY_UNIT_RULES[variable_name]
+        return rule(values.astype(np.float32)), unit
+    return values.astype(np.float32), "native"
+
+
+def native_pct_error(predicted: float, observed: float) -> float:
+    """Calcola una percentuale robusta per riepiloghi predicted vs observed."""
+    if abs(observed) < 1e-12:
+        return 0.0 if abs(predicted) < 1e-12 else 100.0
+    return abs(predicted - observed) / abs(observed) * 100.0
+
+
+def native_temperature_pct_error_kelvin(predicted_c: float, observed_c: float) -> float:
+    """Percentuale di errore della temperatura in Kelvin per evitare instabilita vicino a 0°C."""
+    return native_pct_error(predicted_c + 273.15, observed_c + 273.15)
+
+
+def resolve_native_area_masks(batch, *, bounds: dict[str, float] | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Costruisce le maschere lat/lon della zona di interesse nella griglia nativa."""
+    latitudes = np.asarray(batch.batch_metadata.latitudes, dtype=np.float32)
+    longitudes = np.asarray(batch.batch_metadata.longitudes, dtype=np.float32)
+    if latitudes.ndim > 1:
+        latitudes = latitudes[0]
+    if longitudes.ndim > 1:
+        longitudes = longitudes[0]
+
+    if bounds:
+        lat_mask = (latitudes >= bounds["min_lat"]) & (latitudes <= bounds["max_lat"])
+        lon_mask = (longitudes >= bounds["min_lon"]) & (longitudes <= bounds["max_lon"])
+    else:
+        lat_mask = np.ones_like(latitudes, dtype=bool)
+        lon_mask = np.ones_like(longitudes, dtype=bool)
+
+    if not lat_mask.any() or not lon_mask.any():
+        raise SystemExit("L'area selezionata non interseca la griglia del modello.")
+
+    return lat_mask, lon_mask
+
+
+def subset_native_variable_map(
+    batch,
+    *,
+    group_name: str,
+    variable_name: str,
+    bounds: dict[str, float] | None = None,
+) -> tuple[np.ndarray, str]:
+    """Estrae la mappa di una variabile nativa e la ritaglia sulla zona di interesse."""
+    group = get_native_group(batch, group_name)
+    if variable_name not in group:
+        available = ", ".join(sorted(group.keys())[:12])
+        raise SystemExit(
+            f"Variabile `{variable_name}` non trovata nel gruppo `{group_name}`. "
+            f"Prime variabili disponibili: {available}"
+        )
+
+    raw_map = extract_native_map(group[variable_name])
+    display_map, unit = convert_display_values(variable_name, raw_map)
+    lat_mask, lon_mask = resolve_native_area_masks(batch, bounds=bounds)
+    return display_map[lat_mask][:, lon_mask], unit
+
+
+def compute_native_variable_comparison(
+    predicted_batch,
+    observed_batch,
+    *,
+    group_name: str,
+    variable_name: str,
+    bounds: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """Confronta una singola variabile nativa tra prediction e observed."""
+    predicted_values, unit = subset_native_variable_map(
+        predicted_batch,
+        group_name=group_name,
+        variable_name=variable_name,
+        bounds=bounds,
+    )
+    observed_values, _ = subset_native_variable_map(
+        observed_batch,
+        group_name=group_name,
+        variable_name=variable_name,
+        bounds=bounds,
+    )
+    delta = predicted_values - observed_values
+
+    predicted_mean = float(np.nanmean(predicted_values))
+    observed_mean = float(np.nanmean(observed_values))
+    if variable_name == "t2m":
+        error_pct = native_temperature_pct_error_kelvin(predicted_mean, observed_mean)
+    else:
+        error_pct = native_pct_error(predicted_mean, observed_mean)
+
+    return {
+        "group": group_name,
+        "variable": variable_name,
+        "unit": unit,
+        "predicted_mean": predicted_mean,
+        "observed_mean": observed_mean,
+        "bias": float(predicted_mean - observed_mean),
+        "mae": float(np.nanmean(np.abs(delta))),
+        "rmse": float(np.sqrt(np.nanmean(np.square(delta)))),
+        "error_pct": float(error_pct),
+    }
+
+
+def compute_native_group_comparison(
+    predicted_batch,
+    observed_batch,
+    *,
+    group_name: str,
+    bounds: dict[str, float] | None = None,
+    top_n: int = 5,
+) -> dict[str, Any]:
+    """Confronta tutte le variabili di un gruppo nativo e ne produce un riepilogo."""
+    predicted_group = get_native_group(predicted_batch, group_name)
+    observed_group = get_native_group(observed_batch, group_name)
+    shared_variables = sorted(set(predicted_group).intersection(observed_group))
+    if not shared_variables:
+        raise SystemExit(f"Nessuna variabile condivisa trovata nel gruppo `{group_name}`.")
+
+    rows = [
+        compute_native_variable_comparison(
+            predicted_batch,
+            observed_batch,
+            group_name=group_name,
+            variable_name=variable_name,
+            bounds=bounds,
+        )
+        for variable_name in shared_variables
+    ]
+    ordered_by_mae = sorted(rows, key=lambda row: row["mae"], reverse=True)
+    return {
+        "group": group_name,
+        "variable_count": len(rows),
+        "mean_predicted": float(np.mean([row["predicted_mean"] for row in rows])),
+        "mean_observed": float(np.mean([row["observed_mean"] for row in rows])),
+        "mean_bias": float(np.mean([row["bias"] for row in rows])),
+        "mean_mae": float(np.mean([row["mae"] for row in rows])),
+        "mean_rmse": float(np.mean([row["rmse"] for row in rows])),
+        "mean_error_pct": float(np.mean([row["error_pct"] for row in rows])),
+        "top_variables_by_mae": ordered_by_mae[:top_n],
+    }
+
+
+def resolve_native_batch_path(manifest: dict[str, Any], *, batch_kind: str, rollout_step: int | None = None) -> Path:
+    """Risolviamo il file `.pt` corretto partendo dal manifest del run."""
+    if batch_kind == "prediction":
+        path = manifest.get("native_prediction_original")
+    elif batch_kind == "observed":
+        path = manifest.get("native_target_original")
+    elif batch_kind == "rollout":
+        rollout_paths = manifest.get("native_rollout_batches", [])
+        if not rollout_paths:
+            raise SystemExit("Nel manifest non ci sono rollout batch.")
+        if rollout_step is None:
+            rollout_step = len(rollout_paths)
+        if rollout_step < 1 or rollout_step > len(rollout_paths):
+            raise SystemExit(f"`--rollout-step` fuori range: {rollout_step}")
+        path = rollout_paths[rollout_step - 1]
+    else:
+        raise SystemExit(f"Tipo batch non supportato: {batch_kind}")
+
+    if not path:
+        raise SystemExit(f"Batch `{batch_kind}` non disponibile in questo run.")
+    return Path(path)
+
+
+def summarize_native_batch(batch, *, group_name: str | None = None, variable_name: str | None = None) -> dict[str, Any]:
+    """Produce un riepilogo leggero del batch nativo e, se richiesto, di una variabile specifica."""
+    latitudes = np.asarray(batch.batch_metadata.latitudes, dtype=np.float32)
+    longitudes = np.asarray(batch.batch_metadata.longitudes, dtype=np.float32)
+    if latitudes.ndim > 1:
+        latitudes = latitudes[0]
+    if longitudes.ndim > 1:
+        longitudes = longitudes[0]
+
+    summary: dict[str, Any] = {
+        "timestamps": flatten_batch_timestamps(batch),
+        "lead_time": batch_lead_time_value(batch),
+        "grid_shape": [int(latitudes.size), int(longitudes.size)],
+        "latitude_range": [float(latitudes.min()), float(latitudes.max())],
+        "longitude_range": [float(longitudes.min()), float(longitudes.max())],
+        "group_counts": list_native_group_counts(batch),
+        "group_variables": list_native_group_variables(batch),
+    }
+
+    if group_name and variable_name:
+        group = get_native_group(batch, group_name)
+        if variable_name not in group:
+            raise SystemExit(f"Variabile `{variable_name}` non trovata nel gruppo `{group_name}`.")
+        raw_map = extract_native_map(group[variable_name])
+        display_map, unit = convert_display_values(variable_name, raw_map)
+        summary["variable_summary"] = {
+            "group": group_name,
+            "variable": variable_name,
+            "unit": unit,
+            "min": float(np.nanmin(display_map)),
+            "max": float(np.nanmax(display_map)),
+            "mean": float(np.nanmean(display_map)),
+            "std": float(np.nanstd(display_map)),
+        }
+
+    return summary
+
+
+def compute_native_climate_comparison(
+    predicted_batch,
+    observed_batch,
+    *,
+    bounds: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """Confronta prediction e observed su `t2m` e `tp` nello spazio nativo del modello."""
+    lat_mask, lon_mask = resolve_native_area_masks(predicted_batch, bounds=bounds)
+
+    return {
+        "cell_count": int(lat_mask.sum() * lon_mask.sum()),
+        "temperature_c": compute_native_variable_comparison(
+            predicted_batch,
+            observed_batch,
+            group_name="climate",
+            variable_name="t2m",
+            bounds=bounds,
+        ),
+        "precipitation_mm": compute_native_variable_comparison(
+            predicted_batch,
+            observed_batch,
+            group_name="climate",
+            variable_name="tp",
+            bounds=bounds,
+        ),
+    }
+
+
+def normalize_native_timestamp_to_month(value: str | None) -> str | None:
+    """Normalizza un timestamp qualsiasi al formato `YYYY-MM-DD` del primo giorno del mese."""
+    if value is None:
+        return None
+    return str(pd.Timestamp(value).to_period("M").to_timestamp().date())
+
+
+def evaluate_native_run_sanity(
+    manifest: dict[str, Any],
+    predicted_batch,
+    observed_batch,
+) -> dict[str, Any]:
+    """Controlla che prediction e observed siano coerenti con il contratto del run native."""
+    prediction_path = manifest.get("native_prediction_original")
+    observed_path = manifest.get("native_target_original")
+    predicted_timestamps = flatten_batch_timestamps(predicted_batch)
+    observed_timestamps = flatten_batch_timestamps(observed_batch) if observed_batch is not None else []
+    expected_forecast_month = normalize_native_timestamp_to_month(manifest.get("forecast_month"))
+    expected_input_last_month = normalize_native_timestamp_to_month(
+        manifest.get("input_months", [None, None])[-1] if manifest.get("input_months") else None
+    )
+
+    predicted_last_month = normalize_native_timestamp_to_month(predicted_timestamps[-1]) if predicted_timestamps else None
+    observed_last_month = normalize_native_timestamp_to_month(observed_timestamps[-1]) if observed_timestamps else None
+    observed_previous_month = normalize_native_timestamp_to_month(observed_timestamps[-2]) if len(observed_timestamps) >= 2 else None
+
+    temperature_comparison = compute_native_variable_comparison(
+        predicted_batch,
+        observed_batch,
+        group_name="climate",
+        variable_name="t2m",
+        bounds=manifest.get("bounds"),
+    )
+    precipitation_comparison = compute_native_variable_comparison(
+        predicted_batch,
+        observed_batch,
+        group_name="climate",
+        variable_name="tp",
+        bounds=manifest.get("bounds"),
+    )
+
+    paths_differ = bool(prediction_path and observed_path and Path(prediction_path) != Path(observed_path))
+    predicted_forecast_month_ok = predicted_last_month == expected_forecast_month
+    observed_forecast_month_ok = observed_last_month == expected_forecast_month
+    observed_input_alignment_ok = observed_previous_month == expected_input_last_month
+    lead_time_match = batch_lead_time_value(predicted_batch) == batch_lead_time_value(observed_batch)
+    identical_area_maps = (
+        abs(temperature_comparison["mae"]) < 1e-8 and abs(precipitation_comparison["mae"]) < 1e-8
+    )
+
+    return {
+        "prediction_path": prediction_path,
+        "observed_path": observed_path,
+        "paths_differ": paths_differ,
+        "predicted_timestamps": predicted_timestamps,
+        "observed_timestamps": observed_timestamps,
+        "expected_input_last_month": expected_input_last_month,
+        "expected_forecast_month": expected_forecast_month,
+        "predicted_last_month": predicted_last_month,
+        "observed_previous_month": observed_previous_month,
+        "observed_last_month": observed_last_month,
+        "predicted_forecast_month_ok": predicted_forecast_month_ok,
+        "observed_forecast_month_ok": observed_forecast_month_ok,
+        "observed_input_alignment_ok": observed_input_alignment_ok,
+        "lead_time_prediction": batch_lead_time_value(predicted_batch),
+        "lead_time_observed": batch_lead_time_value(observed_batch),
+        "lead_time_match": lead_time_match,
+        "identical_area_maps_flag": identical_area_maps,
+        "sanity_pass": all(
+            [
+                paths_differ,
+                predicted_forecast_month_ok,
+                observed_forecast_month_ok,
+                observed_input_alignment_ok,
+                lead_time_match,
+            ]
+        ),
     }

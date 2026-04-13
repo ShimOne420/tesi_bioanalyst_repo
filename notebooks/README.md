@@ -1,6 +1,10 @@
 # Notebooks
 
-Questa cartella conterra i notebook Jupyter per:
+Questa cartella contiene notebook di supporto.
+
+Nel ramo `forecast-bioanalyst-native` i notebook non sono il punto principale per il forecast. I run nativi del modello passano prima dagli script Python, non dai notebook.
+
+I notebook che restano servono soprattutto per:
 
 - ispezione del dataset
 - verifica delle variabili disponibili
@@ -14,6 +18,3 @@ Questa cartella conterra i notebook Jupyter per:
 
 - [selected_area.ipynb](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/notebooks/selected_area.ipynb)
   Al momento e un duplicato del notebook esplorativo base. Non contiene ancora correzioni integrate nella pipeline degli indicatori, ma include output gia eseguiti su Milano che possono essere usati come sanity check visuale.
-
-- [02_colab_gpu_validation.ipynb](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/notebooks/02_colab_gpu_validation.ipynb)
-  Notebook pronto per Google Colab che guida il team nella validazione GPU del forecast clima. Include setup, check CUDA, run su città, run su aree non urbane e lettura dei report finali.

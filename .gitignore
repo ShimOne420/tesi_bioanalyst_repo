@@ -5,12 +5,15 @@
 .cache/
 __pycache__/
 *.pyc
+*.tsbuildinfo
 .ipynb_checkpoints/
-external/
+external/*
+!external/README.md
 data/raw/
 data/external/
 models/pretrained/
 outputs/
+web-ui/node_modules
 web-ui/node_modules/
 web-ui/.next/
 web-ui/.vercel/

@@ -24,6 +24,29 @@ Questo ramo contiene solo gli script che servono ancora alla direzione `BioAnaly
 - [bioanalyst_native_utils.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/bioanalyst_native_utils.py)
 - [forecast_native_one_step.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/forecast_native_one_step.py)
 - [forecast_native_rollout.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/forecast_native_rollout.py)
+- [inspect_native_outputs.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/inspect_native_outputs.py)
+- [plot_native_maps.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/plot_native_maps.py)
+- [validate_native_predictions.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/validate_native_predictions.py)
+- [native_to_biomap.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/native_to_biomap.py)
+- [validate_native_biomap.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/validate_native_biomap.py)
+- [activate_bioanalyst_model.ps1](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/activate_bioanalyst_model.ps1)
+
+Oggi i gruppi alimentati da dati reali nel batch nativo sono:
+
+- `surface`
+- `edaphic`
+- `atmospheric`
+- `climate`
+- `species`
+- `land` da `lsm`
+
+Restano ancora placeholder:
+
+- `vegetation`
+- `agriculture`
+- `forest`
+- `redlist`
+- `misc`
 
 ## Cosa E Stato Rimosso Di Proposito
 
@@ -45,4 +68,10 @@ source scripts/activate_bioanalyst_model.sh
 python scripts/check_project_setup.py
 python scripts/forecast_native_one_step.py --city milano --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu
 python scripts/forecast_native_rollout.py --city milano --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu --steps 6
+python scripts/inspect_native_outputs.py --run-dir outputs/local_preview/model_forecast/milan_2019_12_native_one_step
+python scripts/plot_native_maps.py --run-dir outputs/local_preview/model_forecast/milan_2019_12_native_one_step --group climate --variable t2m
+python scripts/validate_native_predictions.py --cases-json data/native_validation_cases_local.json --checkpoint small --device cpu
+python scripts/validate_native_predictions.py --cases-json data/native_validation_cases_cuda_15cities_template.json --checkpoint small --device cuda
+python scripts/native_to_biomap.py --run-dir outputs/local_preview/model_forecast/milan_2019_12_native_one_step
+python scripts/validate_native_biomap.py --cases-json data/native_validation_cases_local.json --checkpoint small --device cpu
 ```

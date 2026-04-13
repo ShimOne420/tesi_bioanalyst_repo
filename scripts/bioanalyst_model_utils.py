@@ -139,6 +139,11 @@ MODEL_SOURCE_FILES = {
         ["sd", "t2m", "d2m"],
     ),
     "species": ("Species/europe_species.parquet", MODEL_SPECIES_VARS),
+    "land_vegetation_dynamic": ("Copernicus/ERA5-monthly/era5-land-vegetation/data_stream-moda.nc", []),
+    "land_vegetation_cover_high": ("Copernicus/ERA5-monthly/era5-land-vegetation/cvh.nc", []),
+    "land_vegetation_cover_low": ("Copernicus/ERA5-monthly/era5-land-vegetation/cvl.nc", []),
+    "land_vegetation_type_high": ("Copernicus/ERA5-monthly/era5-land-vegetation/tvh.nc", []),
+    "land_vegetation_type_low": ("Copernicus/ERA5-monthly/era5-land-vegetation/tvl.nc", []),
 }
 
 
@@ -439,6 +444,30 @@ def build_zero_group(var_names: list[str], months: list[pd.Timestamp]) -> dict[s
     }
 
 
+def build_land_group_from_surface(surface_group: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Costruisce il gruppo `Land` nel modo piu fedele possibile usando `lsm` reale di ERA5."""
+    land_tensor = surface_group["lsm"].clone().to(torch.float32)
+    return {"Land": land_tensor}
+
+
+def build_native_group_source_status(*, use_atmospheric_data: bool) -> dict[str, str]:
+    """Dichiara in modo esplicito quali gruppi sono reali e quali sono ancora placeholder."""
+    return {
+        "surface": "real",
+        "edaphic": "real",
+        "atmospheric": "real" if use_atmospheric_data else "placeholder_zero_fast_smoke_test",
+        "climate": "real",
+        "species": "real",
+        "vegetation": "placeholder_zero",
+        "land": "real_from_surface_lsm",
+        "agriculture": "placeholder_zero",
+        "forest": "placeholder_zero",
+        "redlist": "placeholder_zero",
+        "misc": "placeholder_zero",
+        "land_vegetation_dataset_available": "yes_not_mapped_yet",
+    }
+
+
 # Rasterizziamo le osservazioni specie in mappe mensili binarie [T, H, W] per ogni species ID ufficiale.
 def build_species_group(species_path: Path, months: list[pd.Timestamp], latitudes: np.ndarray, longitudes: np.ndarray) -> dict[str, torch.Tensor]:
     month_lookup = {to_month_start(month): index for index, month in enumerate(months)}
@@ -562,7 +591,7 @@ def build_raw_batch_for_months(
         "climate_variables": climate_group,
         "species_variables": build_species_group(source_paths["species"], months, latitudes, longitudes),
         "vegetation_variables": build_zero_group(MODEL_VEGETATION_VARS, months),
-        "land_variables": build_zero_group(MODEL_LAND_VARS, months),
+        "land_variables": build_land_group_from_surface(surface_group),
         "agriculture_variables": build_zero_group(MODEL_AGRICULTURE_VARS, months),
         "forest_variables": build_zero_group(MODEL_FOREST_VARS, months),
         "redlist_variables": build_zero_group(MODEL_REDLIST_VARS, months),
@@ -579,12 +608,15 @@ def save_window_batches(
     compare_month: pd.Timestamp | None,
     source_paths: dict[str, Path],
     use_atmospheric_data: bool = True,
-) -> dict[str, Path]:
+) -> dict[str, Path | bool]:
     output_dir.mkdir(parents=True, exist_ok=True)
     input_path = output_dir / "window_00000.pt"
     torch.save(build_raw_batch_for_months(source_paths, input_months, use_atmospheric_data=use_atmospheric_data), input_path)
 
-    results = {"input_window": input_path}
+    results: dict[str, Path | bool] = {
+        "input_window": input_path,
+        "atmospheric_data_real": bool(use_atmospheric_data),
+    }
     if compare_month is not None:
         target_path = output_dir / "window_00001.pt"
         torch.save(
@@ -832,10 +864,14 @@ def summarize_batch_for_area(batch, bounds: dict[str, float], species_threshold:
 
     def select_last_map(tensor):
         array = tensor.detach().cpu().numpy()
+        if array.ndim == 5:
+            return array[0, -1, 0]
         if array.ndim == 4:
             return array[0, -1]
         if array.ndim == 3:
             return array[-1]
+        if array.ndim == 2:
+            return array
         raise ValueError(f"Shape non supportata per mappa area-level: {array.shape}")
 
     temperature = select_last_map(batch.climate_variables["t2m"])[lat_mask][:, lon_mask] - 273.15
