@@ -2,6 +2,10 @@
 
 Questa guida serve per portare il ramo `forecast-bioanalyst-native` su una macchina Windows con GPU NVIDIA.
 
+Per una procedura completa pensata per la macchina universitaria, con download diretto di dataset e checkpoint, usa anche:
+
+- [Workflow universita Windows CUDA](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/docs/WORKFLOW_UNIVERSITA_WINDOWS_CUDA.md)
+
 L'obiettivo e semplice:
 
 1. preparare l'ambiente

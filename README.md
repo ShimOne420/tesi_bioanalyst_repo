@@ -155,4 +155,5 @@ python scripts/validate_native_predictions.py --cases-json data/native_validatio
 
 - [Output nativi BioAnalyst](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/docs/OUTPUT_NATIVI_BIOANALYST.md)
 - [Matrice dataset BioAnalyst](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/docs/MATRICE_DATASET_BIOANALYST.md)
+- [Workflow universita Windows CUDA](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/docs/WORKFLOW_UNIVERSITA_WINDOWS_CUDA.md)
 - [Setup Windows con GPU NVIDIA](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/docs/SETUP_WINDOWS_CUDA.md)
