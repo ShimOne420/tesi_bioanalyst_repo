@@ -39,6 +39,11 @@ def build_parser():
         action="store_true",
         help="Salta il blocco atmosferico e usa placeholder a zero per un test tecnico rapido.",
     )
+    parser.add_argument(
+        "--amp-bf16",
+        action="store_true",
+        help="Usa autocast bfloat16 su CUDA per ridurre memoria durante il forward.",
+    )
     return parser
 
 
@@ -78,6 +83,7 @@ def main() -> None:
         context=context,
         runtime=runtime,
         saved_windows=saved_windows,
+        use_amp_bf16=args.amp_bf16,
     )
     artifact_paths = save_native_one_step_artifacts(
         context=context,
@@ -100,6 +106,7 @@ def main() -> None:
         "checkpoint_kind": context.checkpoint_kind,
         "device": str(context.device),
         "fast_smoke_test": bool(args.fast_smoke_test),
+        "amp_bf16": bool(args.amp_bf16),
         "input_months": [
             str(context.months_info["input_prev"].date()),
             str(context.months_info["input_last"].date()),

@@ -16,9 +16,17 @@ Nel ramo native attuale:
 
 - `surface`, `edaphic`, `atmospheric`, `climate`, `species` sono alimentati da dati reali del BioCube locale
 - `land` viene valorizzato dal canale reale `lsm`
-- `vegetation`, `agriculture`, `forest`, `redlist`, `misc` restano ancora placeholder a zero
+- `agriculture` viene valorizzato dai CSV europei `Agriculture`, `Arable`, `Cropland`
+- `forest` viene valorizzato dal CSV europeo `Forest`
+- `vegetation` viene valorizzato dal CSV BioCube `Land/Europe_ndvi_monthly_un_025.csv` se presente; se non presente, usa una proxy dichiarata da `lai_hv + lai_lv`
+- `redlist`, `misc` restano ancora placeholder a zero
 
-Nel BioCube locale e disponibile anche `era5-land-vegetation`, ma per ora non facciamo una mappatura forzata verso `NDVI`, `Forest` o `Agriculture`, per non introdurre canali semanticamente sbagliati nel batch.
+Se manca il CSV NDVI, il fallback su `data_stream-moda.nc` non va descritto come `NDVI` osservato puro: in quel caso e una proxy tecnica da validare.
+
+Il runner supporta due modalita di input:
+
+- `--input-mode clean`: lascia `vegetation`, `agriculture` e `forest` a zero. Serve per capire se gli input extra stanno peggiorando o migliorando il forecast.
+- `--input-mode all`: usa tutti i gruppi disponibili e mappati. E la modalita predefinita dei comandi esistenti.
 
 ## 1. Cosa sono questi file
 
@@ -30,6 +38,7 @@ Il manifest dice:
 - mesi usati in input
 - mese forecastato
 - checkpoint usato
+- input mode usato (`clean` o `all`)
 - device usato
 - path dei file `.pt`
 

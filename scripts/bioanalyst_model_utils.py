@@ -139,12 +139,44 @@ MODEL_SOURCE_FILES = {
         ["sd", "t2m", "d2m"],
     ),
     "species": ("Species/europe_species.parquet", MODEL_SPECIES_VARS),
+    "land_ndvi_csv": ("Land/Europe_ndvi_monthly_un_025.csv", MODEL_VEGETATION_VARS),
     "land_vegetation_dynamic": ("Copernicus/ERA5-monthly/era5-land-vegetation/data_stream-moda.nc", []),
     "land_vegetation_cover_high": ("Copernicus/ERA5-monthly/era5-land-vegetation/cvh.nc", []),
     "land_vegetation_cover_low": ("Copernicus/ERA5-monthly/era5-land-vegetation/cvl.nc", []),
     "land_vegetation_type_high": ("Copernicus/ERA5-monthly/era5-land-vegetation/tvh.nc", []),
     "land_vegetation_type_low": ("Copernicus/ERA5-monthly/era5-land-vegetation/tvl.nc", []),
+    "agriculture_csv": ("Agriculture/Europe_combined_agriculture_data.csv", MODEL_AGRICULTURE_VARS),
+    "forest_csv": ("Forest/Europe_forest_data.csv", MODEL_FOREST_VARS),
 }
+
+# Questi file migliorano la completezza del batch, ma `--input-mode clean`
+# deve poter girare anche senza portarli dentro al test.
+OPTIONAL_MODEL_SOURCE_KEYS = {
+    "land_vegetation_dynamic",
+    "land_ndvi_csv",
+    "land_vegetation_cover_high",
+    "land_vegetation_cover_low",
+    "land_vegetation_type_high",
+    "land_vegetation_type_low",
+    "agriculture_csv",
+    "forest_csv",
+}
+
+
+def normalize_input_mode(input_mode: str) -> str:
+    value = (input_mode or "all").strip().lower()
+    if value not in {"clean", "all"}:
+        raise ValueError(f"input_mode non valido: {input_mode}. Usa 'clean' oppure 'all'.")
+    return value
+
+
+def require_source_path(source_paths: dict[str, Path], key: str) -> Path:
+    if key in source_paths:
+        return source_paths[key]
+    relative_path = MODEL_SOURCE_FILES[key][0]
+    raise FileNotFoundError(
+        f"Sorgente opzionale richiesta da input-mode all ma non trovata: {key} ({relative_path})"
+    )
 
 
 # Verifichiamo un path di ambiente e lo trasformiamo in Path.
@@ -348,6 +380,8 @@ def resolve_source_paths(biocube_dir: Path) -> dict[str, Path]:
     for key, (relative_path, _) in MODEL_SOURCE_FILES.items():
         path = biocube_dir / relative_path
         if not path.exists():
+            if key in OPTIONAL_MODEL_SOURCE_KEYS:
+                continue
             raise FileNotFoundError(f"Sorgente mancante per {key}: {path}")
         resolved[key] = path
     return resolved
@@ -444,27 +478,249 @@ def build_zero_group(var_names: list[str], months: list[pd.Timestamp]) -> dict[s
     }
 
 
+def prepare_yearly_grid_frame(frame: pd.DataFrame, source_name: str) -> pd.DataFrame:
+    """Porta CSV annuali BioCube sulla griglia 0.25 gradi del modello."""
+    required_columns = {"Latitude", "Longitude"}
+    missing_columns = required_columns.difference(frame.columns)
+    if missing_columns:
+        raise KeyError(f"Colonne mancanti in {source_name}: {sorted(missing_columns)}")
+
+    prepared = frame.copy()
+    prepared["Latitude"] = snap_coordinates_to_grid(prepared["Latitude"])
+    prepared["Longitude"] = snap_coordinates_to_grid(prepared["Longitude"])
+    return prepared[
+        prepared["Latitude"].between(MODEL_BOUNDS["min_lat"], MODEL_BOUNDS["max_lat"])
+        & prepared["Longitude"].between(MODEL_BOUNDS["min_lon"], MODEL_BOUNDS["max_lon"])
+    ]
+
+
+def yearly_column_to_grid(
+    frame: pd.DataFrame,
+    column_name: str,
+    latitudes: np.ndarray,
+    longitudes: np.ndarray,
+) -> torch.Tensor:
+    """Rasterizza una colonna annuale CSV in una mappa [H, W] allineata al batch."""
+    if column_name not in frame.columns:
+        raise KeyError(f"Colonna annuale non trovata nel dataset: {column_name}")
+
+    lat_index = {round(float(value), 2): idx for idx, value in enumerate(latitudes)}
+    lon_index = {round(float(value), 2): idx for idx, value in enumerate(longitudes)}
+    tensor = torch.zeros((MODEL_HEIGHT, MODEL_WIDTH), dtype=torch.float32)
+
+    useful = frame[["Latitude", "Longitude", column_name]].dropna(subset=[column_name])
+    grouped = useful.groupby(["Latitude", "Longitude"], as_index=False)[column_name].mean()
+
+    for lat_value, lon_value, data_value in grouped[["Latitude", "Longitude", column_name]].itertuples(index=False, name=None):
+        lat_key = round(float(lat_value), 2)
+        lon_key = round(float(lon_value), 2)
+        if lat_key not in lat_index or lon_key not in lon_index:
+            continue
+        tensor[lat_index[lat_key], lon_index[lon_key]] = float(data_value)
+
+    return tensor
+
+
+def find_monthly_column(columns: list[str], variable_name: str, month: pd.Timestamp) -> str:
+    """Trova una colonna mensile in CSV BioCube accettando i formati piu probabili."""
+    month = to_month_start(month)
+    candidates = [
+        f"{variable_name}_{month:%Y_%m}",
+        f"{variable_name}_{month:%Y-%m}",
+        f"{variable_name}_{month:%Y%m}",
+        f"{variable_name}_{month:%Y-%m-%d}",
+        f"{month:%Y_%m}",
+        f"{month:%Y-%m}",
+        f"{month:%Y%m}",
+        f"{month:%Y-%m-%d}",
+    ]
+    lookup = {str(column).casefold(): str(column) for column in columns}
+    for candidate in candidates:
+        match = lookup.get(candidate.casefold())
+        if match is not None:
+            return match
+    raise KeyError(
+        f"Colonna mensile {variable_name} non trovata per {month:%Y-%m}. "
+        f"Esempi attesi: {candidates[:4]}"
+    )
+
+
+def build_vegetation_group_from_ndvi_csv(
+    ndvi_path: Path,
+    months: list[pd.Timestamp],
+    latitudes: np.ndarray,
+    longitudes: np.ndarray,
+) -> dict[str, torch.Tensor]:
+    """Costruisce il canale NDVI dal CSV ufficiale BioCube quando e disponibile."""
+    ndvi_frame = prepare_yearly_grid_frame(pd.read_csv(ndvi_path), "ndvi")
+    date_column = next(
+        (name for name in ("Timestamp", "timestamp", "Date", "date", "Month", "month", "valid_time") if name in ndvi_frame.columns),
+        None,
+    )
+    ndvi_column = next((name for name in ("NDVI", "ndvi") if name in ndvi_frame.columns), None)
+
+    maps = []
+    if date_column and ndvi_column:
+        dated_frame = ndvi_frame.copy()
+        dated_frame["_month"] = pd.to_datetime(dated_frame[date_column]).dt.to_period("M").dt.to_timestamp()
+        for month in months:
+            month_frame = dated_frame[dated_frame["_month"] == to_month_start(month)]
+            if month_frame.empty:
+                raise KeyError(f"Nessuna riga NDVI trovata per {to_month_start(month):%Y-%m}")
+            maps.append(yearly_column_to_grid(month_frame, ndvi_column, latitudes, longitudes))
+    else:
+        maps = [
+            yearly_column_to_grid(
+                ndvi_frame,
+                find_monthly_column(ndvi_frame.columns.tolist(), "NDVI", month),
+                latitudes,
+                longitudes,
+            )
+            for month in months
+        ]
+    return {"NDVI": torch.stack(maps)}
+
+
+def build_forest_group(forest_path: Path, months: list[pd.Timestamp], latitudes: np.ndarray, longitudes: np.ndarray) -> dict[str, torch.Tensor]:
+    """Costruisce il gruppo `forest` reale usando Europe_forest_data.csv."""
+    forest_frame = prepare_yearly_grid_frame(pd.read_csv(forest_path), "forest")
+    forest_maps = [
+        yearly_column_to_grid(forest_frame, f"Forest_{pd.Timestamp(month).year}", latitudes, longitudes)
+        for month in months
+    ]
+    return {"Forest": torch.stack(forest_maps)}
+
+
+def build_agriculture_group(
+    agriculture_path: Path,
+    months: list[pd.Timestamp],
+    latitudes: np.ndarray,
+    longitudes: np.ndarray,
+) -> dict[str, torch.Tensor]:
+    """Costruisce Agriculture, Arable e Cropland dal CSV agricolo europeo."""
+    agriculture_frame = prepare_yearly_grid_frame(pd.read_csv(agriculture_path), "agriculture")
+    if "Variable" not in agriculture_frame.columns:
+        raise KeyError("Colonna `Variable` mancante nel dataset agriculture.")
+
+    agriculture_frame["Variable"] = agriculture_frame["Variable"].astype(str)
+    available_variables = sorted(agriculture_frame["Variable"].dropna().unique().tolist())
+    group = {}
+
+    for variable_name in MODEL_AGRICULTURE_VARS:
+        variable_frame = agriculture_frame[agriculture_frame["Variable"].str.casefold() == variable_name.casefold()]
+        if variable_frame.empty:
+            raise KeyError(
+                f"Variabile agricola mancante: {variable_name}. "
+                f"Variabili disponibili: {available_variables}"
+            )
+
+        maps = [
+            yearly_column_to_grid(variable_frame, f"Agri_{pd.Timestamp(month).year}", latitudes, longitudes)
+            for month in months
+        ]
+        group[variable_name] = torch.stack(maps)
+
+    return group
+
+
+def select_monthly_grid_array(
+    ds: xr.Dataset,
+    var_name: str,
+    months: list[pd.Timestamp],
+    latitudes: np.ndarray,
+    longitudes: np.ndarray,
+) -> xr.DataArray:
+    """Estrae una variabile mensile e la riallinea alla griglia nativa 0.25 gradi."""
+    positions = resolve_time_positions(ds, months)
+    array = squeeze_common_dims(ds[var_name].isel(valid_time=positions))
+    array = array.sel(
+        latitude=xr.DataArray(latitudes, dims="latitude"),
+        longitude=xr.DataArray(longitudes, dims="longitude"),
+        method="nearest",
+    )
+    return array.transpose("valid_time", "latitude", "longitude")
+
+
+def build_vegetation_group(
+    vegetation_path: Path,
+    months: list[pd.Timestamp],
+    latitudes: np.ndarray,
+    longitudes: np.ndarray,
+) -> dict[str, torch.Tensor]:
+    """Costruisce il canale `NDVI`; se manca NDVI usa una proxy dichiarata da LAI."""
+    with xr.open_dataset(vegetation_path, engine="netcdf4") as ds:
+        ds = normalize_longitude(ds)
+        ndvi_var = next((name for name in ("NDVI", "ndvi") if name in ds.data_vars), None)
+
+        if ndvi_var is not None:
+            ndvi = select_monthly_grid_array(ds, ndvi_var, months, latitudes, longitudes)
+        elif {"lai_hv", "lai_lv"}.issubset(ds.data_vars):
+            lai_hv = select_monthly_grid_array(ds, "lai_hv", months, latitudes, longitudes).fillna(0.0)
+            lai_lv = select_monthly_grid_array(ds, "lai_lv", months, latitudes, longitudes).fillna(0.0)
+            total_lai = lai_hv + lai_lv
+            # Proxy prudente: LAI e NDVI sono correlati ma non equivalenti.
+            ndvi = (1.0 - np.exp(-0.5 * total_lai)).clip(min=0.0, max=0.92)
+        else:
+            raise KeyError(
+                "Dataset vegetation senza NDVI e senza lai_hv/lai_lv. "
+                f"Variabili disponibili: {list(ds.data_vars)}"
+            )
+
+        ndvi = ndvi.load()
+
+    return {"NDVI": torch.from_numpy(ndvi.values.astype(np.float32))}
+
+
+def build_vegetation_group_from_sources(
+    source_paths: dict[str, Path],
+    months: list[pd.Timestamp],
+    latitudes: np.ndarray,
+    longitudes: np.ndarray,
+) -> dict[str, torch.Tensor]:
+    """Preferisce il CSV NDVI ufficiale BioCube; altrimenti usa la sorgente LAI locale."""
+    if "land_ndvi_csv" in source_paths:
+        return build_vegetation_group_from_ndvi_csv(source_paths["land_ndvi_csv"], months, latitudes, longitudes)
+    return build_vegetation_group(
+        require_source_path(source_paths, "land_vegetation_dynamic"),
+        months,
+        latitudes,
+        longitudes,
+    )
+
+
 def build_land_group_from_surface(surface_group: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     """Costruisce il gruppo `Land` nel modo piu fedele possibile usando `lsm` reale di ERA5."""
     land_tensor = surface_group["lsm"].clone().to(torch.float32)
     return {"Land": land_tensor}
 
 
-def build_native_group_source_status(*, use_atmospheric_data: bool) -> dict[str, str]:
+def build_native_group_source_status(*, use_atmospheric_data: bool, input_mode: str = "all") -> dict[str, str]:
     """Dichiara in modo esplicito quali gruppi sono reali e quali sono ancora placeholder."""
+    input_mode = normalize_input_mode(input_mode)
+    if input_mode == "clean":
+        vegetation_status = "placeholder_zero_clean_input_mode"
+        agriculture_status = "placeholder_zero_clean_input_mode"
+        forest_status = "placeholder_zero_clean_input_mode"
+        land_vegetation_status = "skipped_clean_input_mode"
+    else:
+        vegetation_status = "real_ndvi_csv_if_available_else_lai_proxy"
+        agriculture_status = "real_from_europe_agriculture_csv"
+        forest_status = "real_from_europe_forest_csv"
+        land_vegetation_status = "prefer_land_ndvi_csv_else_lai_proxy"
+
     return {
         "surface": "real",
         "edaphic": "real",
         "atmospheric": "real" if use_atmospheric_data else "placeholder_zero_fast_smoke_test",
         "climate": "real",
         "species": "real",
-        "vegetation": "placeholder_zero",
+        "vegetation": vegetation_status,
         "land": "real_from_surface_lsm",
-        "agriculture": "placeholder_zero",
-        "forest": "placeholder_zero",
+        "agriculture": agriculture_status,
+        "forest": forest_status,
         "redlist": "placeholder_zero",
         "misc": "placeholder_zero",
-        "land_vegetation_dataset_available": "yes_not_mapped_yet",
+        "land_vegetation_dataset_available": land_vegetation_status,
     }
 
 
@@ -526,7 +782,9 @@ def build_raw_batch_for_months(
     source_paths: dict[str, Path],
     months: list[pd.Timestamp],
     use_atmospheric_data: bool = True,
+    input_mode: str = "all",
 ) -> dict:
+    input_mode = normalize_input_mode(input_mode)
     print("  - preparo griglia modello", flush=True)
     latitudes, longitudes = load_model_grid(source_paths)
 
@@ -544,6 +802,33 @@ def build_raw_batch_for_months(
     climate_ds_a = open_model_domain_dataset(source_paths["climate_a"], months)
     print("  - carico climate_b", flush=True)
     climate_ds_b = open_model_domain_dataset(source_paths["climate_b"], months)
+    if input_mode == "all":
+        print("  - carico agriculture CSV", flush=True)
+        agriculture_group = build_agriculture_group(
+            require_source_path(source_paths, "agriculture_csv"),
+            months,
+            latitudes,
+            longitudes,
+        )
+        print("  - carico forest CSV", flush=True)
+        forest_group = build_forest_group(
+            require_source_path(source_paths, "forest_csv"),
+            months,
+            latitudes,
+            longitudes,
+        )
+        print("  - carico vegetation / NDVI", flush=True)
+        vegetation_group = build_vegetation_group_from_sources(
+            source_paths,
+            months,
+            latitudes,
+            longitudes,
+        )
+    else:
+        print("  - input-mode clean: vegetation/agriculture/forest a zero", flush=True)
+        agriculture_group = build_zero_group(MODEL_AGRICULTURE_VARS, months)
+        forest_group = build_zero_group(MODEL_FOREST_VARS, months)
+        vegetation_group = build_zero_group(MODEL_VEGETATION_VARS, months)
 
     print("  - estraggo surface group", flush=True)
     surface_group = {name: extract_month_tensor(surface_ds, name, months) for name in MODEL_SURFACE_VARS}
@@ -590,10 +875,10 @@ def build_raw_batch_for_months(
         "atmospheric_variables": atmospheric_group,
         "climate_variables": climate_group,
         "species_variables": build_species_group(source_paths["species"], months, latitudes, longitudes),
-        "vegetation_variables": build_zero_group(MODEL_VEGETATION_VARS, months),
+        "vegetation_variables": vegetation_group,
         "land_variables": build_land_group_from_surface(surface_group),
-        "agriculture_variables": build_zero_group(MODEL_AGRICULTURE_VARS, months),
-        "forest_variables": build_zero_group(MODEL_FOREST_VARS, months),
+        "agriculture_variables": agriculture_group,
+        "forest_variables": forest_group,
         "redlist_variables": build_zero_group(MODEL_REDLIST_VARS, months),
         "misc_variables": build_zero_group(MODEL_MISC_VARS, months),
     }
@@ -608,14 +893,25 @@ def save_window_batches(
     compare_month: pd.Timestamp | None,
     source_paths: dict[str, Path],
     use_atmospheric_data: bool = True,
+    input_mode: str = "all",
 ) -> dict[str, Path | bool]:
+    input_mode = normalize_input_mode(input_mode)
     output_dir.mkdir(parents=True, exist_ok=True)
     input_path = output_dir / "window_00000.pt"
-    torch.save(build_raw_batch_for_months(source_paths, input_months, use_atmospheric_data=use_atmospheric_data), input_path)
+    torch.save(
+        build_raw_batch_for_months(
+            source_paths,
+            input_months,
+            use_atmospheric_data=use_atmospheric_data,
+            input_mode=input_mode,
+        ),
+        input_path,
+    )
 
     results: dict[str, Path | bool] = {
         "input_window": input_path,
         "atmospheric_data_real": bool(use_atmospheric_data),
+        "input_mode": input_mode,
     }
     if compare_month is not None:
         target_path = output_dir / "window_00001.pt"
@@ -624,6 +920,7 @@ def save_window_batches(
                 source_paths,
                 [input_months[-1], compare_month],
                 use_atmospheric_data=use_atmospheric_data,
+                input_mode=input_mode,
             ),
             target_path,
         )
@@ -643,13 +940,40 @@ def resolve_checkpoint_path(model_dir: Path, checkpoint_name: str = "small") -> 
     return checkpoint_path
 
 
-# Costruiamo una config Hydra locale usando il repo ufficiale ma con path e device del progetto.
-def build_local_config(batch_dir: Path, checkpoint_path: Path, device_name: str):
-    overrides = [
+def infer_checkpoint_kind(checkpoint_path: Path) -> str:
+    """Deduce il tipo di checkpoint dal nome file per scegliere la config corretta."""
+    name = checkpoint_path.name.lower()
+    if "large" in name:
+        return "large"
+    return "small"
+
+
+def checkpoint_model_overrides(checkpoint_kind: str) -> list[str]:
+    """Override minimi per costruire l'architettura coerente con il checkpoint."""
+    if checkpoint_kind == "large":
+        return [
+            "model.embed_dim=512",
+            "model.depth=10",
+            "model.patch_size=8",
+            "model.swin_backbone_size=large",
+            "model.num_heads=16",
+            "training.precision=bf16-mixed",
+        ]
+    return [
         "model.embed_dim=256",
         "model.depth=3",
+        "model.patch_size=4",
         "model.swin_backbone_size=medium",
         "model.num_heads=16",
+        "training.precision=32-true",
+    ]
+
+
+# Costruiamo una config Hydra locale usando il repo ufficiale ma con path e device del progetto.
+def build_local_config(batch_dir: Path, checkpoint_path: Path, device_name: str):
+    checkpoint_kind = infer_checkpoint_kind(checkpoint_path)
+    overrides = [
+        *checkpoint_model_overrides(checkpoint_kind),
         f"model.H={MODEL_HEIGHT}",
         f"model.W={MODEL_WIDTH}",
         f"data.test_data_path='{batch_dir}'",
@@ -660,7 +984,6 @@ def build_local_config(batch_dir: Path, checkpoint_path: Path, device_name: str)
         f"evaluation.checkpoint_path='{checkpoint_path}'",
         "training.devices=[1]",
         "training.accelerator=cpu",
-        "training.precision=32-true",
         "training.precision_in=high",
         f"evaluation.test_device={device_name}",
     ]

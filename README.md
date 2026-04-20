@@ -46,18 +46,16 @@ Nel ramo native, oggi i gruppi che usano dati reali sono:
 Nel BioCube locale e presente anche:
 
 - `Copernicus/ERA5-monthly/era5-land-vegetation`
+- `Land/Europe_ndvi_monthly_un_025.csv`
+- `Agriculture/Europe_combined_agriculture_data.csv`
+- `Forest/Europe_forest_data.csv`
 
-ma per ora non forziamo ancora una mappatura diretta verso:
+La mappatura attuale distingue due modalita operative:
 
-- `NDVI`
-- `Forest`
-- `Agriculture`
-- `Arable`
-- `Cropland`
-- `RLI`
-- `misc`
+- `--input-mode clean`: usa solo i gruppi core reali e lascia `vegetation`, `agriculture`, `forest` a zero per fare un test pulito.
+- `--input-mode all`: aggiunge `agriculture`, `forest` e `vegetation`; quest'ultima usa il CSV NDVI ufficiale se presente, altrimenti una proxy dichiarata da `lai_hv + lai_lv`.
 
-perche i file disponibili (`lai_hv`, `lai_lv`, `cvh`, `cvl`, `tvh`, `tvl`) non coincidono ancora in modo documentato con i canali che BioAnalyst si aspetta. Per adesso questi gruppi restano placeholder a zero e il manifest del run lo dichiara esplicitamente.
+`redlist` e `misc` restano placeholder a zero. Il manifest del run dichiara sempre quali gruppi sono reali, proxy o placeholder.
 
 ## Script Principali
 

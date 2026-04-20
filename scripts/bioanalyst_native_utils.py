@@ -54,6 +54,7 @@ class NativeRunContext:
     batch_dir: Path
     checkpoint_path: Path
     checkpoint_kind: str
+    input_mode: str
     device: torch.device
     project_output_dir: Path
 
@@ -178,7 +179,8 @@ def build_native_run_context(
     months_info = resolve_forecast_months(args.start, args.end)
     device = resolve_torch_device(args.device)
     checkpoint_path = resolve_checkpoint_path(model_dir, args.checkpoint)
-    run_label = f"{slugify(label)}_{months_info['end_month'].strftime('%Y_%m')}_{run_suffix}"
+    input_mode = getattr(args, "input_mode", "all")
+    run_label = f"{slugify(label)}_{args.checkpoint}_{input_mode}_{months_info['end_month'].strftime('%Y_%m')}_{run_suffix}"
     run_dir = resolve_forecast_output_dir(project_output_dir, run_label)
     batch_dir = run_dir / "batches"
     return NativeRunContext(
@@ -190,6 +192,7 @@ def build_native_run_context(
         batch_dir=batch_dir,
         checkpoint_path=checkpoint_path,
         checkpoint_kind=args.checkpoint,
+        input_mode=input_mode,
         device=device,
         project_output_dir=project_output_dir,
     )
@@ -213,6 +216,7 @@ def prepare_native_saved_windows(
         compare_month=compare_month,
         source_paths=source_paths,
         use_atmospheric_data=use_atmospheric_data,
+        input_mode=context.input_mode,
     )
 
 
@@ -275,13 +279,16 @@ def run_native_one_step(
     context: NativeRunContext,
     runtime: NativeRuntime,
     saved_windows: dict[str, Path],
+    use_amp_bf16: bool = False,
 ) -> NativeOneStepResult:
     """Esegue un forecast one-step e restituisce solo output nativi del modello."""
     dataset, x_batch_scaled = load_native_scaled_input(saved_windows, runtime)
 
     with torch.inference_mode():
         x_batch_device = runtime.batch_to_device(x_batch_scaled, context.device)
-        predicted_dict_scaled = runtime.model(x_batch_device, runtime.model.lead_time, batch_size=1)
+        autocast_enabled = bool(use_amp_bf16 and context.device.type == "cuda")
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=autocast_enabled):
+            predicted_dict_scaled = runtime.model(x_batch_device, runtime.model.lead_time, batch_size=1)
         predicted_batch_scaled = runtime.build_new_batch_with_prediction(x_batch_device, predicted_dict_scaled, months=1)
 
     predicted_batch_original = rescale_batch_correct(
@@ -310,6 +317,7 @@ def run_native_rollout(
     runtime: NativeRuntime,
     saved_windows: dict[str, Path],
     steps: int,
+    use_amp_bf16: bool = False,
 ) -> NativeRolloutResult:
     """Esegue un rollout multi-step del runner nativo e restituisce solo batch nativi."""
     dataset, initial_batch_scaled = load_native_scaled_input(saved_windows, runtime)
@@ -318,7 +326,9 @@ def run_native_rollout(
         curr = runtime.batch_to_device(initial_batch_scaled, context.device)
         rollout_batches_scaled = []
         for rollout_step in range(steps):
-            preds = runtime.model(curr, runtime.model.lead_time, batch_size=1, rollout_step=rollout_step)
+            autocast_enabled = bool(use_amp_bf16 and context.device.type == "cuda")
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=autocast_enabled):
+                preds = runtime.model(curr, runtime.model.lead_time, batch_size=1, rollout_step=rollout_step)
             next_batch = runtime.build_new_batch_with_prediction(curr, preds)
             rollout_batches_scaled.append(next_batch)
             curr = next_batch
@@ -364,6 +374,7 @@ def save_native_one_step_artifacts(
         "bounds": context.bounds,
         "checkpoint": str(context.checkpoint_path),
         "checkpoint_kind": context.checkpoint_kind,
+        "input_mode": context.input_mode,
         "device": str(context.device),
         "input_months": [
             str(context.months_info["input_prev"].date()),
@@ -376,7 +387,8 @@ def save_native_one_step_artifacts(
         "native_target_original": str(observed_path) if observed_path else None,
         "checkpoint_diagnostics": runtime.checkpoint_diagnostics,
         "group_source_status": build_native_group_source_status(
-            use_atmospheric_data=bool(result.saved_windows.get("atmospheric_data_real", True))
+            use_atmospheric_data=bool(result.saved_windows.get("atmospheric_data_real", True)),
+            input_mode=context.input_mode,
         ),
     }
     write_json(context.run_dir / "forecast_native_manifest.json", manifest)
@@ -410,6 +422,7 @@ def save_native_rollout_artifacts(
         "bounds": context.bounds,
         "checkpoint": str(context.checkpoint_path),
         "checkpoint_kind": context.checkpoint_kind,
+        "input_mode": context.input_mode,
         "device": str(context.device),
         "input_months": [
             str(context.months_info["input_prev"].date()),
@@ -421,7 +434,8 @@ def save_native_rollout_artifacts(
         "native_rollout_batches": [str(path) for path in batch_paths],
         "checkpoint_diagnostics": runtime.checkpoint_diagnostics,
         "group_source_status": build_native_group_source_status(
-            use_atmospheric_data=bool(result.saved_windows.get("atmospheric_data_real", True))
+            use_atmospheric_data=bool(result.saved_windows.get("atmospheric_data_real", True)),
+            input_mode=context.input_mode,
         ),
     }
     write_json(context.run_dir / "forecast_native_manifest.json", manifest)

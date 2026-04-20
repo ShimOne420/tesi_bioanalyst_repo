@@ -12,3 +12,6 @@ huggingface_hub
 fastapi
 uvicorn
 geonamescache
+hydra-core
+omegaconf
+safetensors

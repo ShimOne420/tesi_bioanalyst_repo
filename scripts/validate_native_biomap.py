@@ -41,6 +41,7 @@ def build_parser():
     parser.add_argument("--device", choices=["auto", "cpu", "cuda", "mps"], default="cpu")
     parser.add_argument("--species-threshold", type=float, default=0.5)
     parser.add_argument("--error-threshold-pct", type=float, default=3.0)
+    parser.add_argument("--amp-bf16", action="store_true", help="Usa autocast bfloat16 su CUDA per ridurre memoria.")
     parser.add_argument("--output-label", default=None, help="Etichetta della cartella riassuntiva finale.")
     return parser
 
@@ -230,6 +231,7 @@ def main() -> None:
             context=context,
             runtime=runtime,
             saved_windows=saved_windows,
+            use_amp_bf16=args.amp_bf16,
         )
         save_native_one_step_artifacts(
             context=context,
