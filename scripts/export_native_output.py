@@ -79,11 +79,11 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def as_1d_float_array(value: Any) -> np.ndarray:
+def as_1d_float_array(value):
+    if isinstance(value, torch.Tensor):
+        value = value.detach().cpu().numpy()
     array = np.asarray(value, dtype=np.float32)
-    if array.ndim > 1:
-        array = array[0]
-    return array
+    return array.reshape(-1)
 
 
 def selected_area_mask(latitudes: np.ndarray, longitudes: np.ndarray, bounds: dict[str, float] | None) -> np.ndarray:
