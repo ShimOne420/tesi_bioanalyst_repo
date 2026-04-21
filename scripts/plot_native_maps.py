@@ -23,6 +23,12 @@ from bioanalyst_native_utils import (
     load_native_manifest,
     resolve_native_batch_path,
 )
+from spatial_alignment import (
+    align_prediction_map,
+    plot_origin_for_latitudes,
+    prediction_latitude_flip_enabled,
+    prediction_longitude_flip_enabled,
+)
 
 
 def build_parser():
@@ -63,6 +69,19 @@ def build_parser():
         type=Path,
         default=None,
         help="Path finale del PNG. Se omesso, salva in `run_dir/plots`.",
+    )
+    parser.add_argument(
+        "--align-prediction-latitude",
+        dest="align_prediction_latitude",
+        action="store_true",
+        default=None,
+        help="Forza il flip nord-sud della prediction anche se il manifest non lo dichiara.",
+    )
+    parser.add_argument(
+        "--no-align-prediction-latitude",
+        dest="align_prediction_latitude",
+        action="store_false",
+        help="Non applica il flip nord-sud dichiarato nel manifest alla prediction.",
     )
     return parser
 
@@ -117,6 +136,12 @@ def main() -> None:
     args = build_parser().parse_args()
     run_dir = args.run_dir.resolve()
     manifest = load_native_manifest(run_dir)
+    align_prediction_latitude = (
+        bool(args.align_prediction_latitude)
+        if args.align_prediction_latitude is not None
+        else bool(prediction_latitude_flip_enabled(manifest))
+    )
+    align_prediction_longitude = bool(prediction_longitude_flip_enabled(manifest))
 
     if args.difference:
         if not manifest.get("native_prediction_original") or not manifest.get("native_target_original"):
@@ -127,6 +152,11 @@ def main() -> None:
             prediction_batch,
             group_name=args.group,
             variable_name=args.variable,
+        )
+        prediction_map = align_prediction_map(
+            prediction_map,
+            latitude_flip=align_prediction_latitude,
+            longitude_flip=align_prediction_longitude,
         )
         observed_map, _ = get_batch_variable_map(
             observed_batch,
@@ -149,6 +179,12 @@ def main() -> None:
             group_name=args.group,
             variable_name=args.variable,
         )
+        if args.batch_kind in ("prediction", "rollout"):
+            map_values = align_prediction_map(
+                map_values,
+                latitude_flip=align_prediction_latitude,
+                longitude_flip=align_prediction_longitude,
+            )
         title = f"{args.group}.{args.variable} ({args.batch_kind})"
         cmap = "coolwarm" if args.variable == "t2m" else "viridis"
         latitudes, longitudes = get_grid_coordinates(batch)
@@ -164,7 +200,7 @@ def main() -> None:
     fig, ax = plt.subplots(figsize=(11, 6))
     image = ax.imshow(
         map_values,
-        origin="lower",
+        origin=plot_origin_for_latitudes(latitudes),
         extent=[float(longitudes.min()), float(longitudes.max()), float(latitudes.min()), float(latitudes.max())],
         aspect="auto",
         cmap=cmap,

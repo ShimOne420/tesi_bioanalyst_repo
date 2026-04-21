@@ -39,6 +39,14 @@ from bioanalyst_native_utils import (
     save_native_one_step_artifacts,
 )
 from plot_native_maps import add_selection_box, get_batch_variable_map, get_grid_coordinates
+from spatial_alignment import (
+    align_prediction_map,
+    build_alignment_diagnostic_frame,
+    build_spatial_alignment_metadata,
+    plot_origin_for_latitudes,
+    prediction_latitude_flip_enabled,
+    prediction_longitude_flip_enabled,
+)
 
 
 def build_parser():
@@ -176,7 +184,7 @@ def plot_map(output_path: Path, map_values: np.ndarray, latitudes: np.ndarray, l
     fig, ax = plt.subplots(figsize=(11, 6))
     image = ax.imshow(
         map_values,
-        origin="lower",
+        origin=plot_origin_for_latitudes(latitudes),
         extent=[float(longitudes.min()), float(longitudes.max()), float(latitudes.min()), float(latitudes.max())],
         aspect="auto",
         cmap="coolwarm",
@@ -337,6 +345,7 @@ def build_area_summary_frame(
     run_dir: Path,
 ) -> pd.DataFrame:
     rows = []
+    spatial_alignment = manifest.get("spatial_alignment", {})
     for spec in area_specs:
         area_frame = select_area_cells(frame, spec["bounds"])
         area_lat, area_lon = bounds_center(spec["bounds"])
@@ -364,6 +373,8 @@ def build_area_summary_frame(
                 "checkpoint_kind": manifest.get("checkpoint_kind"),
                 "input_mode": manifest.get("input_mode"),
                 "device": manifest.get("device"),
+                "prediction_latitude_flip_applied": bool(spatial_alignment.get("prediction_latitude_flip_applied", False)),
+                "prediction_longitude_flip_applied": bool(spatial_alignment.get("prediction_longitude_flip_applied", False)),
                 "group": group,
                 "variable": variable,
                 "unit": unit,
@@ -440,9 +451,16 @@ def export_maps_and_matrix(
     predicted_batch = move_tensors_to_cpu(predicted_batch)
     observed_batch = move_tensors_to_cpu(observed_batch) if observed_batch is not None else None
 
-    predicted_map, unit = get_batch_variable_map(predicted_batch, group_name=group, variable_name=variable)
+    predicted_map_raw, unit = get_batch_variable_map(predicted_batch, group_name=group, variable_name=variable)
     latitudes, longitudes = get_grid_coordinates(predicted_batch)
     bounds = manifest["bounds"]
+    latitude_flip = prediction_latitude_flip_enabled(manifest)
+    longitude_flip = prediction_longitude_flip_enabled(manifest)
+    predicted_map = align_prediction_map(
+        predicted_map_raw,
+        latitude_flip=latitude_flip,
+        longitude_flip=longitude_flip,
+    )
 
     outputs: dict[str, str] = {}
     prediction_png = plots_dir / f"{variable}_prediction.png"
@@ -450,8 +468,10 @@ def export_maps_and_matrix(
     outputs["prediction_png"] = str(prediction_png)
 
     observed_map = None
+    alignment_diagnostic_frame = None
     if observed_batch is not None:
         observed_map, _ = get_batch_variable_map(observed_batch, group_name=group, variable_name=variable)
+        alignment_diagnostic_frame = build_alignment_diagnostic_frame(predicted_map_raw, observed_map)
         observed_png = plots_dir / f"{variable}_observed.png"
         difference_png = plots_dir / f"{variable}_difference.png"
         plot_map(observed_png, observed_map, latitudes, longitudes, f"{group}.{variable} observed", unit, bounds)
@@ -475,6 +495,8 @@ def export_maps_and_matrix(
             compute_summary(area_frame, value_label, "selected_area"),
         ]
     )
+    summary_frame["prediction_latitude_flip_applied"] = bool(latitude_flip)
+    summary_frame["prediction_longitude_flip_applied"] = bool(longitude_flip)
     area_summary_frame = build_area_summary_frame(
         frame=frame,
         value_label=value_label,
@@ -494,6 +516,8 @@ def export_maps_and_matrix(
 
     with pd.ExcelWriter(workbook_path) as writer:
         summary_frame.to_excel(writer, sheet_name="summary", index=False)
+        if alignment_diagnostic_frame is not None:
+            alignment_diagnostic_frame.to_excel(writer, sheet_name="alignment_diagnostic", index=False)
         area_frame.to_excel(writer, sheet_name="selected_area", index=False)
         frame.to_excel(writer, sheet_name="full_grid", index=False)
     area_summary_frame.to_excel(area_summary_path, index=False)
@@ -538,6 +562,8 @@ def export_full_native_output(
     bounds = manifest.get("bounds")
     group_counts = list_native_group_counts(predicted_batch)
     group_variables = list_native_group_variables(predicted_batch)
+    latitude_flip = prediction_latitude_flip_enabled(manifest)
+    longitude_flip = prediction_longitude_flip_enabled(manifest)
 
     run_info = {
         "native_prediction_original": manifest.get("native_prediction_original"),
@@ -557,7 +583,10 @@ def export_full_native_output(
         "longitude_max": float(longitudes.max()),
         "selected_group_for_preview": selected_group,
         "selected_variable_for_preview": selected_variable,
-        "values_note": "Group CSV files keep native .pt values; selected_variable also includes display values for readability.",
+        "prediction_latitude_flip_applied": bool(latitude_flip),
+        "prediction_longitude_flip_applied": bool(longitude_flip),
+        "native_pt_preserved": True,
+        "values_note": "Readable exports keep native units and apply declared spatial alignment; native .pt artifacts are preserved unchanged.",
     }
     group_rows = [
         {
@@ -581,6 +610,8 @@ def export_full_native_output(
             time_index=-1,
             level_index=0,
             observed_batch=observed_batch,
+            align_prediction_latitude=latitude_flip,
+            align_prediction_longitude=longitude_flip,
         ),
         "coordinates": build_grid_frame(latitudes, longitudes, bounds),
         "manifest": pd.DataFrame(rows_from_mapping(manifest)),
@@ -601,6 +632,8 @@ def export_full_native_output(
                 bounds=bounds,
                 time_index=-1,
                 level_index=0,
+                align_prediction_latitude=latitude_flip,
+                align_prediction_longitude=longitude_flip,
             )
             group_frame.to_csv(csv_dir / f"{group_name}_variables_grid.csv", index=False, encoding="utf-8-sig")
         outputs["native_group_csv_dir"] = str(csv_dir)
@@ -669,6 +702,7 @@ def main() -> None:
         "fast_smoke_test": bool(args.fast_smoke_test),
         "input_mode": args.input_mode,
     }
+    manifest["spatial_alignment"] = build_spatial_alignment_metadata()
     artifact_paths["manifest"].write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
 
     print("[4/4] Esporto PNG e matrice Excel", flush=True)

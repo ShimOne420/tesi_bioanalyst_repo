@@ -24,6 +24,11 @@ from bioanalyst_native_utils import (
     load_native_manifest,
     resolve_native_batch_path,
 )
+from spatial_alignment import (
+    align_prediction_map,
+    prediction_latitude_flip_enabled,
+    prediction_longitude_flip_enabled,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,6 +62,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-coordinates-sheet",
         action="store_true",
         help="Non inserisce la griglia completa delle coordinate nell'Excel.",
+    )
+    parser.add_argument(
+        "--align-prediction-latitude",
+        dest="align_prediction_latitude",
+        action="store_true",
+        default=None,
+        help="Ribalta nord-sud la prediction durante l'export leggibile. Non modifica il .pt.",
+    )
+    parser.add_argument(
+        "--no-align-prediction-latitude",
+        dest="align_prediction_latitude",
+        action="store_false",
+        help="Disattiva il flip nord-sud anche se il manifest lo dichiara.",
     )
     return parser
 
@@ -207,6 +225,8 @@ def build_selected_variable_frame(
     time_index: int,
     level_index: int,
     observed_batch=None,
+    align_prediction_latitude: bool = False,
+    align_prediction_longitude: bool = False,
 ) -> pd.DataFrame:
     group = get_native_group(batch, group_name)
     if variable_name not in group:
@@ -214,6 +234,11 @@ def build_selected_variable_frame(
         raise SystemExit(f"Variabile {group_name}.{variable_name} non trovata. Disponibili: {available}")
 
     native_map = select_2d_map(group[variable_name], time_index=time_index, level_index=level_index)
+    native_map = align_prediction_map(
+        native_map,
+        latitude_flip=align_prediction_latitude,
+        longitude_flip=align_prediction_longitude,
+    )
     display_map, unit = convert_display_values(variable_name, native_map)
     area_mask = selected_area_mask(latitudes, longitudes, bounds)
 
@@ -262,6 +287,8 @@ def build_group_wide_frame(
     bounds: dict[str, float] | None,
     time_index: int,
     level_index: int,
+    align_prediction_latitude: bool = False,
+    align_prediction_longitude: bool = False,
 ) -> pd.DataFrame:
     frame = build_grid_frame(latitudes, longitudes, bounds)
     group = get_native_group(batch, group_name)
@@ -277,11 +304,21 @@ def build_group_wide_frame(
             level_count = array.shape[2]
             for current_level in range(level_count):
                 native_map = select_2d_map(tensor, time_index=time_index, level_index=current_level)
+                native_map = align_prediction_map(
+                    native_map,
+                    latitude_flip=align_prediction_latitude,
+                    longitude_flip=align_prediction_longitude,
+                )
                 level_label = pressure_levels[current_level] if current_level < len(pressure_levels) else current_level
                 column_name = f"{variable_name}_level_{level_label}_native"
                 frame[column_name] = native_map.reshape(-1)
         else:
             native_map = select_2d_map(tensor, time_index=time_index, level_index=level_index)
+            native_map = align_prediction_map(
+                native_map,
+                latitude_flip=align_prediction_latitude,
+                longitude_flip=align_prediction_longitude,
+            )
             column_name = f"{variable_name}_native"
             frame[column_name] = native_map.reshape(-1)
     return frame
@@ -345,6 +382,12 @@ def main() -> None:
     manifest, batch_path, batch, observed_path = resolve_inputs(args)
     run_dir = args.run_dir.resolve() if args.run_dir else None
     observed_batch = load_native_batch_artifact(observed_path) if observed_path and observed_path.exists() else None
+    align_prediction_latitude = bool(args.batch_kind in ("prediction", "rollout")) and (
+        bool(args.align_prediction_latitude)
+        if args.align_prediction_latitude is not None
+        else bool(args.batch_kind == "prediction" and prediction_latitude_flip_enabled(manifest))
+    )
+    align_prediction_longitude = bool(args.batch_kind == "prediction" and prediction_longitude_flip_enabled(manifest))
 
     latitudes = as_1d_float_array(batch.batch_metadata.latitudes)
     longitudes = as_1d_float_array(batch.batch_metadata.longitudes)
@@ -360,6 +403,8 @@ def main() -> None:
         time_index=args.time_index,
         level_index=args.level_index,
         observed_batch=observed_batch,
+        align_prediction_latitude=align_prediction_latitude,
+        align_prediction_longitude=align_prediction_longitude,
     )
 
     group_counts = list_native_group_counts(batch)
@@ -393,6 +438,9 @@ def main() -> None:
         "selected_variable": args.variable,
         "selected_time_index": args.time_index,
         "selected_level_index": args.level_index,
+        "prediction_latitude_flip_applied": align_prediction_latitude,
+        "prediction_longitude_flip_applied": align_prediction_longitude,
+        "native_pt_preserved": True,
     }
 
     sheets = {
@@ -421,6 +469,8 @@ def main() -> None:
                 bounds=bounds,
                 time_index=args.time_index,
                 level_index=args.level_index,
+                align_prediction_latitude=align_prediction_latitude,
+                align_prediction_longitude=align_prediction_longitude,
             )
             csv_path = csv_dir / f"{group_name}_variables_grid.csv"
             group_frame.to_csv(csv_path, index=False, encoding="utf-8-sig")
