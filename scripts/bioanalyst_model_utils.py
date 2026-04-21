@@ -524,25 +524,146 @@ def yearly_column_to_grid(
 def find_monthly_column(columns: list[str], variable_name: str, month: pd.Timestamp) -> str:
     """Trova una colonna mensile in CSV BioCube accettando i formati piu probabili."""
     month = to_month_start(month)
+    month_number = int(month.month)
+    month_tokens = {
+        f"{month_number}",
+        f"{month_number:02d}",
+        month.strftime("%b").lower(),
+        month.strftime("%B").lower(),
+    }
     candidates = [
         f"{variable_name}_{month:%Y_%m}",
         f"{variable_name}_{month:%Y-%m}",
         f"{variable_name}_{month:%Y%m}",
         f"{variable_name}_{month:%Y-%m-%d}",
+        f"{variable_name}_{month.year}_{month_number}",
+        f"{variable_name}_{month.year}-{month_number}",
+        f"{month:%Y_%m}_{variable_name}",
+        f"{month:%Y-%m}_{variable_name}",
         f"{month:%Y_%m}",
         f"{month:%Y-%m}",
         f"{month:%Y%m}",
         f"{month:%Y-%m-%d}",
+        f"{month.year}_{month_number}",
+        f"{month.year}-{month_number}",
     ]
     lookup = {str(column).casefold(): str(column) for column in columns}
     for candidate in candidates:
         match = lookup.get(candidate.casefold())
         if match is not None:
             return match
+
+    ignored = {"country", "latitude", "longitude", "lat", "lon", "year", "month", "date", "timestamp", "variable"}
+    regex_matches = []
+    for column in columns:
+        column_text = str(column)
+        normalized = re.sub(r"[^a-zA-Z0-9]+", " ", column_text).casefold()
+        tokens = set(normalized.split())
+        if column_text.casefold() in ignored:
+            continue
+        if str(month.year) not in tokens:
+            continue
+        if not tokens.intersection(month_tokens):
+            continue
+        regex_matches.append(column_text)
+
+    if regex_matches:
+        with_variable_name = [name for name in regex_matches if variable_name.casefold() in name.casefold()]
+        return with_variable_name[0] if with_variable_name else regex_matches[0]
+
     raise KeyError(
         f"Colonna mensile {variable_name} non trovata per {month:%Y-%m}. "
-        f"Esempi attesi: {candidates[:4]}"
+        f"Esempi attesi: {candidates[:6]}. "
+        f"Prime colonne disponibili: {columns[:20]}"
     )
+
+
+def find_value_column(columns: list[str], variable_name: str) -> str:
+    """Trova una colonna valore in un CSV long-form di BioCube."""
+    candidates = [
+        variable_name,
+        variable_name.lower(),
+        variable_name.upper(),
+        "value",
+        "Value",
+        "mean",
+        "Mean",
+        "mean_value",
+        "Mean_Value",
+        f"{variable_name}_value",
+        f"{variable_name}_mean",
+        f"mean_{variable_name}",
+    ]
+    lookup = {str(column).casefold(): str(column) for column in columns}
+    for candidate in candidates:
+        match = lookup.get(candidate.casefold())
+        if match is not None:
+            return match
+
+    ignored = {
+        "country",
+        "latitude",
+        "longitude",
+        "lat",
+        "lon",
+        "year",
+        "month",
+        "date",
+        "timestamp",
+        "valid_time",
+        "variable",
+    }
+    for column in columns:
+        column_text = str(column)
+        if column_text.casefold() not in ignored:
+            return column_text
+    raise KeyError(f"Nessuna colonna valore trovata per {variable_name}. Colonne: {columns[:20]}")
+
+
+def month_number_from_value(value) -> int:
+    """Interpreta mese numerico, nome mese o data completa."""
+    if pd.isna(value):
+        raise ValueError("mese nullo")
+    numeric_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if not pd.isna(numeric_value):
+        return int(numeric_value)
+
+    text = str(value).strip()
+    try:
+        return int(pd.Timestamp(text).month)
+    except Exception:
+        month_lookup = {
+            "jan": 1,
+            "january": 1,
+            "feb": 2,
+            "february": 2,
+            "mar": 3,
+            "march": 3,
+            "apr": 4,
+            "april": 4,
+            "may": 5,
+            "jun": 6,
+            "june": 6,
+            "jul": 7,
+            "july": 7,
+            "aug": 8,
+            "august": 8,
+            "sep": 9,
+            "sept": 9,
+            "september": 9,
+            "oct": 10,
+            "october": 10,
+            "nov": 11,
+            "november": 11,
+            "dec": 12,
+            "december": 12,
+        }
+        key = text.casefold()[:3] if len(text) > 3 else text.casefold()
+        if key in month_lookup:
+            return month_lookup[key]
+        if text.casefold() in month_lookup:
+            return month_lookup[text.casefold()]
+        raise
 
 
 def build_vegetation_group_from_ndvi_csv(
@@ -557,17 +678,33 @@ def build_vegetation_group_from_ndvi_csv(
         (name for name in ("Timestamp", "timestamp", "Date", "date", "Month", "month", "valid_time") if name in ndvi_frame.columns),
         None,
     )
+    year_column = next((name for name in ("Year", "year", "YEAR", "Anno", "anno") if name in ndvi_frame.columns), None)
+    month_column = next((name for name in ("Month", "month", "MONTH", "Mese", "mese") if name in ndvi_frame.columns), None)
     ndvi_column = next((name for name in ("NDVI", "ndvi") if name in ndvi_frame.columns), None)
 
     maps = []
-    if date_column and ndvi_column:
+    if year_column and month_column:
+        value_column = ndvi_column or find_value_column(ndvi_frame.columns.tolist(), "NDVI")
+        dated_frame = ndvi_frame.copy()
+        dated_frame["_year"] = pd.to_numeric(dated_frame[year_column], errors="coerce").astype("Int64")
+        dated_frame["_month_number"] = dated_frame[month_column].map(month_number_from_value)
+        for month in months:
+            month_frame = dated_frame[
+                (dated_frame["_year"] == int(month.year))
+                & (dated_frame["_month_number"] == int(month.month))
+            ]
+            if month_frame.empty:
+                raise KeyError(f"Nessuna riga NDVI trovata per {to_month_start(month):%Y-%m}")
+            maps.append(yearly_column_to_grid(month_frame, value_column, latitudes, longitudes))
+    elif date_column:
+        value_column = ndvi_column or find_value_column(ndvi_frame.columns.tolist(), "NDVI")
         dated_frame = ndvi_frame.copy()
         dated_frame["_month"] = pd.to_datetime(dated_frame[date_column]).dt.to_period("M").dt.to_timestamp()
         for month in months:
             month_frame = dated_frame[dated_frame["_month"] == to_month_start(month)]
             if month_frame.empty:
                 raise KeyError(f"Nessuna riga NDVI trovata per {to_month_start(month):%Y-%m}")
-            maps.append(yearly_column_to_grid(month_frame, ndvi_column, latitudes, longitudes))
+            maps.append(yearly_column_to_grid(month_frame, value_column, latitudes, longitudes))
     else:
         maps = [
             yearly_column_to_grid(
