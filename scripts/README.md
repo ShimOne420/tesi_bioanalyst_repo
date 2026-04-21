@@ -25,6 +25,7 @@ Questo ramo contiene solo gli script che servono ancora alla direzione `BioAnaly
 - [forecast_native_one_step.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/forecast_native_one_step.py)
 - [forecast_native_rollout.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/forecast_native_rollout.py)
 - [inspect_native_outputs.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/inspect_native_outputs.py)
+- [export_native_output.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/export_native_output.py)
 - [plot_native_maps.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/plot_native_maps.py)
 - [validate_native_predictions.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/validate_native_predictions.py)
 - [native_to_biomap.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/native_to_biomap.py)
@@ -69,6 +70,7 @@ python scripts/check_project_setup.py
 python scripts/forecast_native_one_step.py --city milano --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu
 python scripts/forecast_native_rollout.py --city milano --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu --steps 6
 python scripts/inspect_native_outputs.py --run-dir outputs/local_preview/model_forecast/milan_2019_12_native_one_step
+python scripts/export_native_output.py --run-dir outputs/local_preview/model_forecast/milan_2019_12_native_one_step --batch-kind prediction --group climate --variable t2m
 python scripts/plot_native_maps.py --run-dir outputs/local_preview/model_forecast/milan_2019_12_native_one_step --group climate --variable t2m
 python scripts/validate_native_predictions.py --cases-json data/native_validation_cases_local.json --checkpoint small --device cpu
 python scripts/validate_native_predictions.py --cases-json data/native_validation_cases_cuda_15cities_template.json --checkpoint small --device cuda

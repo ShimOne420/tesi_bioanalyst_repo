@@ -60,8 +60,8 @@ CITY_CATALOG_PATH = PROJECT_ROOT / "data" / "european_cities.json"
 
 # Definiamo il dominio usato per i batch del modello, allineato alla mask ufficiale 160x280.
 MODEL_BOUNDS = {
-    "min_lat": 30.0,
-    "max_lat": 70.0,
+    "min_lat": 32.0,
+    "max_lat": 72.0,
     "min_lon": -25.0,
     "max_lon": 45.0,
 }

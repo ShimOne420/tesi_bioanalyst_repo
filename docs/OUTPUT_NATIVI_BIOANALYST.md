@@ -169,6 +169,33 @@ Con `inspect_native_outputs.py` guardiamo:
 - `RMSE`
 - sanity checks prediction vs observed
 
+Per aprire il contenuto originale del `.pt` in Excel:
+
+```bash
+python scripts/export_native_output.py --run-dir outputs/model_forecast/NOME_RUN --batch-kind prediction --group climate --variable t2m
+```
+
+Se vuoi fare run + export completo con un solo comando, usa `run.py` con:
+
+```bash
+python scripts/run.py --label Europe_native_large_all_2019_06 --min-lat 32.0 --max-lat 72.0 --min-lon -25.0 --max-lon 45.0 --start 2019-04-01 --end 2019-05-01 --checkpoint large --device cuda --input-mode all --group climate --variable t2m --export-native-full --export-native-group-csvs --no-history
+```
+
+Il workbook creato contiene:
+
+- `run_info`: file letto, timestamp, griglia, checkpoint e input mode
+- `groups`: gruppi BioAnalyst e variabili disponibili
+- `variables`: tutte le variabili native con shape, dtype e statistiche
+- `selected_variable`: valori cella-per-cella della variabile scelta
+- `coordinates`: coordinate complete della griglia europea
+- `manifest`: manifest del run in formato tabellare
+
+Se serve esportare anche un CSV per ogni gruppo:
+
+```bash
+python scripts/export_native_output.py --run-dir outputs/model_forecast/NOME_RUN --batch-kind prediction --group climate --variable t2m --export-group-csvs
+```
+
 Per un benchmark nativo su piu casi:
 
 ```bash

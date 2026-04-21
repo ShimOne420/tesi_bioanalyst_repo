@@ -76,7 +76,7 @@ Gli script BIOMAP restano disponibili, ma vengono dopo:
 ```bash
 source scripts/activate_bioanalyst_model.sh
 python scripts/check_project_setup.py
-python -m py_compile scripts/bioanalyst_model_utils.py scripts/bioanalyst_native_utils.py scripts/forecast_native_one_step.py scripts/forecast_native_rollout.py scripts/inspect_native_outputs.py scripts/plot_native_maps.py scripts/validate_native_predictions.py scripts/native_to_biomap.py scripts/validate_native_biomap.py
+python -m py_compile scripts/bioanalyst_model_utils.py scripts/bioanalyst_native_utils.py scripts/forecast_native_one_step.py scripts/forecast_native_rollout.py scripts/inspect_native_outputs.py scripts/export_native_output.py scripts/plot_native_maps.py scripts/validate_native_predictions.py scripts/native_to_biomap.py scripts/validate_native_biomap.py
 ```
 
 One-step nativo:
@@ -95,6 +95,18 @@ Ispezione output:
 
 ```bash
 python scripts/inspect_native_outputs.py --run-dir outputs/local_preview/model_forecast/madrid_2019_12_native_one_step --group climate --variable t2m
+```
+
+Excel dell'output `.pt` nativo:
+
+```bash
+python scripts/export_native_output.py --run-dir outputs/local_preview/model_forecast/madrid_2019_12_native_one_step --batch-kind prediction --group climate --variable t2m
+```
+
+Run + export completo dei valori nativi:
+
+```bash
+python scripts/run.py --label Europe_native_large_all_2019_06 --min-lat 32.0 --max-lat 72.0 --min-lon -25.0 --max-lon 45.0 --start 2019-04-01 --end 2019-05-01 --checkpoint large --device cuda --input-mode all --group climate --variable t2m --export-native-full --export-native-group-csvs --no-history
 ```
 
 Mappa della temperatura:

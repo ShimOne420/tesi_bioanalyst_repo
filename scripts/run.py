@@ -92,6 +92,16 @@ def build_parser():
         action="store_true",
         help="Non aggiorna il workbook cumulativo.",
     )
+    parser.add_argument(
+        "--export-native-full",
+        action="store_true",
+        help="Esporta anche un workbook leggibile dell'output .pt nativo completo.",
+    )
+    parser.add_argument(
+        "--export-native-group-csvs",
+        action="store_true",
+        help="Con --export-native-full, esporta anche un CSV per ogni gruppo nativo con tutte le variabili.",
+    )
     return parser
 
 
@@ -499,6 +509,105 @@ def export_maps_and_matrix(
     return outputs, area_summary_frame
 
 
+def export_full_native_output(
+    *,
+    run_dir: Path,
+    manifest: dict[str, Any],
+    predicted_batch: Any,
+    observed_batch: Any | None,
+    selected_group: str,
+    selected_variable: str,
+    export_group_csvs: bool,
+) -> dict[str, str]:
+    """Esporta il contenuto del .pt nativo in Excel/CSV senza ricalcolare il modello."""
+    from bioanalyst_native_utils import NATIVE_GROUP_FIELDS, flatten_batch_timestamps, list_native_group_counts, list_native_group_variables
+    from export_native_output import (
+        as_1d_float_array,
+        build_grid_frame,
+        build_group_wide_frame,
+        build_selected_variable_frame,
+        build_variable_inventory,
+        rows_from_mapping,
+        write_excel_with_fallback,
+    )
+
+    export_dir = run_dir / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    latitudes = as_1d_float_array(predicted_batch.batch_metadata.latitudes)
+    longitudes = as_1d_float_array(predicted_batch.batch_metadata.longitudes)
+    bounds = manifest.get("bounds")
+    group_counts = list_native_group_counts(predicted_batch)
+    group_variables = list_native_group_variables(predicted_batch)
+
+    run_info = {
+        "native_prediction_original": manifest.get("native_prediction_original"),
+        "native_target_original": manifest.get("native_target_original"),
+        "label": manifest.get("label"),
+        "mode": manifest.get("mode"),
+        "checkpoint_kind": manifest.get("checkpoint_kind"),
+        "input_mode": manifest.get("input_mode"),
+        "device": manifest.get("device"),
+        "timestamps": flatten_batch_timestamps(predicted_batch),
+        "grid_lat_count": int(latitudes.size),
+        "grid_lon_count": int(longitudes.size),
+        "grid_cell_count": int(latitudes.size * longitudes.size),
+        "latitude_min": float(latitudes.min()),
+        "latitude_max": float(latitudes.max()),
+        "longitude_min": float(longitudes.min()),
+        "longitude_max": float(longitudes.max()),
+        "selected_group_for_preview": selected_group,
+        "selected_variable_for_preview": selected_variable,
+        "values_note": "Group CSV files keep native .pt values; selected_variable also includes display values for readability.",
+    }
+    group_rows = [
+        {
+            "group": group_name,
+            "variable_count": group_counts.get(group_name, 0),
+            "variables": ", ".join(group_variables.get(group_name, [])),
+        }
+        for group_name in NATIVE_GROUP_FIELDS
+    ]
+    sheets = {
+        "run_info": pd.DataFrame(rows_from_mapping(run_info)),
+        "groups": pd.DataFrame.from_records(group_rows),
+        "variables": build_variable_inventory(predicted_batch, time_index=-1, level_index=0),
+        "selected_variable": build_selected_variable_frame(
+            predicted_batch,
+            group_name=selected_group,
+            variable_name=selected_variable,
+            latitudes=latitudes,
+            longitudes=longitudes,
+            bounds=bounds,
+            time_index=-1,
+            level_index=0,
+            observed_batch=observed_batch,
+        ),
+        "coordinates": build_grid_frame(latitudes, longitudes, bounds),
+        "manifest": pd.DataFrame(rows_from_mapping(manifest)),
+    }
+
+    full_xlsx = write_excel_with_fallback(export_dir / "bioanalyst_native_full_output.xlsx", sheets)
+    outputs = {"native_full_xlsx": str(full_xlsx)}
+
+    if export_group_csvs:
+        csv_dir = export_dir / "bioanalyst_native_full_output_group_csv"
+        csv_dir.mkdir(parents=True, exist_ok=True)
+        for group_name in NATIVE_GROUP_FIELDS:
+            group_frame = build_group_wide_frame(
+                predicted_batch,
+                group_name=group_name,
+                latitudes=latitudes,
+                longitudes=longitudes,
+                bounds=bounds,
+                time_index=-1,
+                level_index=0,
+            )
+            group_frame.to_csv(csv_dir / f"{group_name}_variables_grid.csv", index=False, encoding="utf-8-sig")
+        outputs["native_group_csv_dir"] = str(csv_dir)
+
+    return outputs
+
+
 def main() -> None:
     args = build_parser().parse_args()
     if args.attention_chunk_size:
@@ -581,6 +690,20 @@ def main() -> None:
         )
         history_xlsx = args.history_xlsx or (context.run_dir.parent / default_history_name)
         export_paths["history_xlsx"] = str(update_history_workbook(history_xlsx, area_summary_frame))
+
+    if args.export_native_full:
+        print("[extra] Esporto output nativo completo BioAnalyst in Excel/CSV", flush=True)
+        export_paths.update(
+            export_full_native_output(
+                run_dir=context.run_dir,
+                manifest=manifest,
+                predicted_batch=result.predicted_batch_original,
+                observed_batch=result.observed_batch_original,
+                selected_group=args.group,
+                selected_variable=args.variable,
+                export_group_csvs=args.export_native_group_csvs,
+            )
+        )
 
     print(
         json.dumps(
