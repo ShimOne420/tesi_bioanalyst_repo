@@ -49,6 +49,52 @@ from spatial_alignment import (
 )
 
 
+RELIABLE_PLOT_FEATURES = [
+    {
+        "folder": "temperature",
+        "file_prefix": "t2m",
+        "group": "climate",
+        "variable": "t2m",
+        "cmap": "coolwarm",
+    },
+    {
+        "folder": "ndvi",
+        "file_prefix": "ndvi",
+        "group": "vegetation",
+        "variable": "NDVI",
+        "cmap": "YlGn",
+    },
+    {
+        "folder": "swvl1",
+        "file_prefix": "swvl1",
+        "group": "edaphic",
+        "variable": "swvl1",
+        "cmap": "Blues",
+    },
+    {
+        "folder": "swvl2",
+        "file_prefix": "swvl2",
+        "group": "edaphic",
+        "variable": "swvl2",
+        "cmap": "Blues",
+    },
+    {
+        "folder": "cropland",
+        "file_prefix": "cropland",
+        "group": "agriculture",
+        "variable": "Cropland",
+        "cmap": "YlOrBr",
+    },
+    {
+        "folder": "precipitation",
+        "file_prefix": "tp",
+        "group": "climate",
+        "variable": "tp",
+        "cmap": "PuBu",
+    },
+]
+
+
 def build_parser():
     parser = build_selection_parser("Run unico per forecast BioAnalyst native con mappe ed Excel di validazione.")
     parser.add_argument("--checkpoint", choices=["small", "large"], default="small")
@@ -179,7 +225,16 @@ def install_chunked_cuda_attention(chunk_size: int) -> None:
     print(f"[cuda] Attention chunking runtime attivo: chunk_size={chunk_size}", flush=True)
 
 
-def plot_map(output_path: Path, map_values: np.ndarray, latitudes: np.ndarray, longitudes: np.ndarray, title: str, unit: str, bounds: dict[str, float]) -> None:
+def plot_map(
+    output_path: Path,
+    map_values: np.ndarray,
+    latitudes: np.ndarray,
+    longitudes: np.ndarray,
+    title: str,
+    unit: str,
+    bounds: dict[str, float],
+    cmap: str = "coolwarm",
+) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(11, 6))
     image = ax.imshow(
@@ -187,7 +242,7 @@ def plot_map(output_path: Path, map_values: np.ndarray, latitudes: np.ndarray, l
         origin=plot_origin_for_latitudes(latitudes),
         extent=[float(longitudes.min()), float(longitudes.max()), float(latitudes.min()), float(latitudes.max())],
         aspect="auto",
-        cmap="coolwarm",
+        cmap=cmap,
     )
     add_selection_box(ax, bounds)
     ax.set_title(title)
@@ -198,6 +253,92 @@ def plot_map(output_path: Path, map_values: np.ndarray, latitudes: np.ndarray, l
     fig.tight_layout()
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
+
+
+def export_reliable_feature_plots(
+    run_dir: Path,
+    manifest: dict[str, Any],
+    predicted_batch: Any,
+    observed_batch: Any | None,
+) -> dict[str, Any]:
+    """Salva prediction/observed/difference PNG per le feature BIOMAP piu utili."""
+    plot_root = run_dir / "plots" / "reliable_features"
+    predicted_batch = move_tensors_to_cpu(predicted_batch)
+    observed_batch = move_tensors_to_cpu(observed_batch) if observed_batch is not None else None
+
+    latitudes, longitudes = get_grid_coordinates(predicted_batch)
+    bounds = manifest["bounds"]
+    latitude_flip = prediction_latitude_flip_enabled(manifest)
+    longitude_flip = prediction_longitude_flip_enabled(manifest)
+    outputs: dict[str, Any] = {
+        "root": str(plot_root),
+        "features": {},
+        "missing_features": [],
+    }
+
+    for feature in RELIABLE_PLOT_FEATURES:
+        group = feature["group"]
+        variable = feature["variable"]
+        file_prefix = feature["file_prefix"]
+        feature_dir = plot_root / feature["folder"]
+        try:
+            predicted_map_raw, unit = get_batch_variable_map(predicted_batch, group_name=group, variable_name=variable)
+        except SystemExit as exc:
+            outputs["missing_features"].append({"group": group, "variable": variable, "reason": str(exc)})
+            continue
+
+        predicted_map = align_prediction_map(
+            predicted_map_raw,
+            latitude_flip=latitude_flip,
+            longitude_flip=longitude_flip,
+        )
+        prediction_png = feature_dir / f"{file_prefix}_prediction.png"
+        plot_map(
+            prediction_png,
+            predicted_map,
+            latitudes,
+            longitudes,
+            f"{group}.{variable} prediction",
+            unit,
+            bounds,
+            cmap=feature["cmap"],
+        )
+
+        feature_outputs = {"prediction_png": str(prediction_png)}
+        if observed_batch is not None:
+            try:
+                observed_map, _ = get_batch_variable_map(observed_batch, group_name=group, variable_name=variable)
+            except SystemExit as exc:
+                outputs["missing_features"].append({"group": group, "variable": variable, "reason": str(exc)})
+            else:
+                observed_png = feature_dir / f"{file_prefix}_observed.png"
+                difference_png = feature_dir / f"{file_prefix}_difference.png"
+                plot_map(
+                    observed_png,
+                    observed_map,
+                    latitudes,
+                    longitudes,
+                    f"{group}.{variable} observed",
+                    unit,
+                    bounds,
+                    cmap=feature["cmap"],
+                )
+                plot_map(
+                    difference_png,
+                    predicted_map - observed_map,
+                    latitudes,
+                    longitudes,
+                    f"{group}.{variable} prediction - observed",
+                    unit,
+                    bounds,
+                    cmap="coolwarm",
+                )
+                feature_outputs["observed_png"] = str(observed_png)
+                feature_outputs["difference_png"] = str(difference_png)
+
+        outputs["features"][file_prefix] = feature_outputs
+
+    return outputs
 
 
 def build_cell_frame(
@@ -715,6 +856,12 @@ def main() -> None:
         args.group,
         args.variable,
         area_specs,
+    )
+    export_paths["reliable_feature_plots"] = export_reliable_feature_plots(
+        context.run_dir,
+        manifest,
+        result.predicted_batch_original,
+        result.observed_batch_original,
     )
     if not args.no_history:
         default_history_name = (
