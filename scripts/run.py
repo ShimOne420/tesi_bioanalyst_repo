@@ -29,6 +29,7 @@ from omegaconf import OmegaConf
 
 from bioanalyst_model_utils import build_selection_parser
 from bioanalyst_model_utils import resolve_city_bounds
+from biomap_final_workbook import update_biomap_final_workbook
 from bioanalyst_native_utils import (
     build_native_run_context,
     build_native_runtime,
@@ -155,6 +156,17 @@ def build_parser():
         "--export-native-group-csvs",
         action="store_true",
         help="Con --export-native-full, esporta anche un CSV per ogni gruppo nativo con tutte le variabili.",
+    )
+    parser.add_argument(
+        "--biomap-final-workbook",
+        type=Path,
+        default=None,
+        help="Workbook finale BIOMAP da aggiornare automaticamente. Se omesso usa il percorso canonico.",
+    )
+    parser.add_argument(
+        "--no-biomap-final-workbook",
+        action="store_true",
+        help="Non aggiorna il workbook finale BIOMAP a fine run.",
     )
     return parser
 
@@ -884,6 +896,16 @@ def main() -> None:
                 selected_variable=args.variable,
                 export_group_csvs=args.export_native_group_csvs,
             )
+        )
+
+    if not args.no_biomap_final_workbook:
+        print("[extra] Aggiorno workbook finale BIOMAP", flush=True)
+        export_paths["biomap_final_workbook"] = update_biomap_final_workbook(
+            current_run_dir=context.run_dir,
+            prediction_batch=result.predicted_batch_original,
+            observed_batch=result.observed_batch_original,
+            manifest=manifest,
+            workbook_path=args.biomap_final_workbook if args.biomap_final_workbook is not None else None,
         )
 
     print(
