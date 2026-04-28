@@ -62,6 +62,19 @@ SPECIAL_SHEET_NAMES = {
     ("climate", "t2m"): "Temperature_t2m",
     ("climate", "tp"): "Precipitation_tp",
     ("vegetation", "NDVI"): "Vegetation_NDVI",
+    ("edaphic", "swvl1"): "Edaphic_swvl1",
+    ("edaphic", "swvl2"): "Edaphic_swvl2",
+    ("agriculture", "Cropland"): "Agriculture_Cropland",
+}
+
+
+MAIN_DETAIL_FEATURES = {
+    ("climate", "t2m"),
+    ("climate", "tp"),
+    ("vegetation", "NDVI"),
+    ("edaphic", "swvl1"),
+    ("edaphic", "swvl2"),
+    ("agriculture", "Cropland"),
 }
 
 
@@ -132,7 +145,10 @@ def iter_run_dirs(root: Path) -> list[Path]:
 
 
 def workbook_sheet_name(group: str, variable: str, used_names: set[str]) -> str:
-    base = SPECIAL_SHEET_NAMES.get((group, variable), f"{group}_{variable}")
+    if group == "species":
+        base = f"Species_{variable}"
+    else:
+        base = SPECIAL_SHEET_NAMES.get((group, variable), f"{group}_{variable}")
     base = re.sub(r"[^A-Za-z0-9_]+", "_", base).strip("_") or "Sheet"
     base = base[:31]
     candidate = base
@@ -143,6 +159,18 @@ def workbook_sheet_name(group: str, variable: str, used_names: set[str]) -> str:
         counter += 1
     used_names.add(candidate)
     return candidate
+
+
+def slug_text(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "_", str(value)).strip("_").lower()
+
+
+def detail_run_id(manifest: dict[str, Any], run_dir: Path) -> str:
+    forecast_month = str(manifest.get("forecast_month") or "unknown").replace("-", "_")
+    checkpoint = slug_text(manifest.get("checkpoint_kind") or "ckpt")
+    input_mode = slug_text(manifest.get("input_mode") or "input")
+    label = slug_text(run_label(manifest, run_dir))[:40]
+    return f"{forecast_month}_{checkpoint}_{input_mode}_{label}"
 
 
 def run_label(manifest: dict[str, Any], run_dir: Path) -> str:
@@ -578,10 +606,11 @@ def build_feature_sheet(
 
 def build_latest_feature_sheets(
     *,
-    run_dir: Path,
-    manifest: dict[str, Any],
-    prediction_batch: Any,
-    observed_batch: Any,
+    run_dirs: list[Path],
+    current_run_dir: Path,
+    current_manifest: dict[str, Any],
+    current_prediction_batch: Any,
+    current_observed_batch: Any,
 ) -> OrderedDict[str, pd.DataFrame]:
     used_names: set[str] = {
         "Dashboard_BIOMAP",
@@ -591,23 +620,98 @@ def build_latest_feature_sheets(
         "All_Variables",
         "Species_Biodiversity",
     }
-    sheets: OrderedDict[str, pd.DataFrame] = OrderedDict()
-    for group_name in ant.GROUP_FIELDS:
-        pred_group = ant.get_group(prediction_batch, group_name)
-        obs_group = ant.get_group(observed_batch, group_name)
-        for variable in sorted(pred_group):
-            if variable not in obs_group:
+    detail_specs: list[tuple[str, str, str]] = []
+    current_species = ant.get_group(current_prediction_batch, "species")
+    for group_name, variable in sorted(MAIN_DETAIL_FEATURES):
+        pred_group = ant.get_group(current_prediction_batch, group_name)
+        obs_group = ant.get_group(current_observed_batch, group_name)
+        if variable in pred_group and variable in obs_group:
+            detail_specs.append((workbook_sheet_name(group_name, variable, used_names), group_name, variable))
+    for variable in sorted(current_species):
+        detail_specs.append((workbook_sheet_name("species", variable, used_names), "species", variable))
+
+    base_bounds = current_manifest.get("bounds")
+    base_latitudes = ant.as_1d(current_prediction_batch.batch_metadata.latitudes)
+    base_longitudes = ant.as_1d(current_prediction_batch.batch_metadata.longitudes)
+    base_sheet_frames: OrderedDict[str, pd.DataFrame] = OrderedDict()
+    sheet_meta: dict[str, tuple[str, str]] = {}
+    for sheet_name, group_name, variable in detail_specs:
+        pred_group = ant.get_group(current_prediction_batch, group_name)
+        pred_tensor = pred_group[variable]
+        pred_maps = ant.selected_maps(pred_tensor)
+        unit = ant.convert_display_values(variable, pred_maps[0][1])[1]
+        frame = base_grid_frame(base_latitudes, base_longitudes, base_bounds)
+        frame["group"] = group_name
+        frame["variable"] = variable
+        frame["unit"] = unit
+        base_sheet_frames[sheet_name] = frame
+        sheet_meta[sheet_name] = (group_name, variable)
+
+    cached_batches: dict[Path, tuple[Any, Any, dict[str, Any]]] = {
+        current_run_dir: (current_prediction_batch, current_observed_batch, current_manifest)
+    }
+    for run_dir in run_dirs:
+        if run_dir in cached_batches:
+            prediction_batch, observed_batch, manifest = cached_batches[run_dir]
+        else:
+            manifest = load_json(run_dir / "forecast_native_manifest.json")
+            prediction_batch = ant.load_batch(run_dir / "native_prediction_original.pt")
+            observed_batch = ant.load_batch(run_dir / "native_target_original.pt")
+            cached_batches[run_dir] = (prediction_batch, observed_batch, manifest)
+
+        latitudes = ant.as_1d(prediction_batch.batch_metadata.latitudes)
+        longitudes = ant.as_1d(prediction_batch.batch_metadata.longitudes)
+        if latitudes.shape != base_latitudes.shape or longitudes.shape != base_longitudes.shape:
+            continue
+        if not np.allclose(latitudes, base_latitudes) or not np.allclose(longitudes, base_longitudes):
+            continue
+
+        run_id = detail_run_id(manifest, run_dir)
+        lat_flip, lon_flip = ant.prediction_alignment_flags(manifest)
+        for sheet_name, frame in base_sheet_frames.items():
+            group_name, variable = sheet_meta[sheet_name]
+            pred_group = ant.get_group(prediction_batch, group_name)
+            obs_group = ant.get_group(observed_batch, group_name)
+            if variable not in pred_group or variable not in obs_group:
                 continue
-            sheet_name = workbook_sheet_name(group_name, variable, used_names)
-            sheets[sheet_name] = build_feature_sheet(
-                run_dir=run_dir,
-                manifest=manifest,
-                prediction_batch=prediction_batch,
-                observed_batch=observed_batch,
-                group=group_name,
-                variable=variable,
+            pred_map_native = ant.selected_maps(pred_group[variable])[0][1]
+            obs_map_native = ant.selected_maps(obs_group[variable])[0][1]
+            pred_map_native = ant.align_prediction(pred_map_native, latitude_flip=lat_flip, longitude_flip=lon_flip)
+            pred_display, _ = ant.convert_display_values(variable, pred_map_native)
+            obs_display, _ = ant.convert_display_values(variable, obs_map_native)
+            metrics = ant.compute_metrics(pred_display, obs_display)
+
+            frame[f"observed__{run_id}"] = obs_display.reshape(-1).astype(np.float32)
+            frame[f"predicted__{run_id}"] = pred_display.reshape(-1).astype(np.float32)
+            frame[f"difference__{run_id}"] = (pred_display - obs_display).reshape(-1).astype(np.float32)
+            frame[f"abs_error__{run_id}"] = np.abs(pred_display - obs_display).reshape(-1).astype(np.float32)
+            frame[f"mae__{run_id}"] = metrics["mae"]
+            frame[f"rmse__{run_id}"] = metrics["rmse"]
+            frame[f"bias__{run_id}"] = metrics["bias"]
+            frame[f"correlation__{run_id}"] = metrics["correlation"]
+            frame[f"relative_mae_pct__{run_id}"] = metrics["relative_mae_pct"]
+            frame[f"biomap_readiness__{run_id}"] = readiness(
+                group_name,
+                variable,
+                metrics["mae"],
+                metrics["bias"],
+                metrics["correlation"],
+                metrics["relative_mae_pct"],
             )
-    return sheets
+
+            if group_name == "species":
+                binary = feature_binary_metrics(group_name, pred_display, obs_display)
+                frame[f"tp__{run_id}"] = binary["tp"]
+                frame[f"fp__{run_id}"] = binary["fp"]
+                frame[f"fn__{run_id}"] = binary["fn"]
+                frame[f"tn__{run_id}"] = binary["tn"]
+                frame[f"precision__{run_id}"] = binary["precision"]
+                frame[f"recall__{run_id}"] = binary["recall"]
+                frame[f"f1_score__{run_id}"] = binary["f1_score"]
+                frame[f"jaccard_similarity__{run_id}"] = binary["jaccard_similarity"]
+                frame[f"sorensen_similarity__{run_id}"] = binary["sorensen_similarity"]
+
+    return base_sheet_frames
 
 
 def write_workbook(path: Path, sheets: OrderedDict[str, pd.DataFrame]) -> Path:
@@ -666,16 +770,25 @@ def write_operational_report(
         "",
         "- aggiorna sempre lo stesso workbook finale BIOMAP;",
         "- mantiene fogli cumulativi di sintesi (`Coverage`, `Metric_Guide`, `Dashboard_BIOMAP`, `BIOMAP_Indicator_Map`, `All_Variables`, `Species_Biodiversity`);",
-        "- rigenera i fogli di dettaglio cella-per-cella per il run piu recente, uno per ogni feature disponibile nel batch native BioAnalyst;",
+        "- aggiorna i fogli di dettaglio cella-per-cella nello stesso workbook, aggiungendo nuovi dati run-per-run solo per le variabili principali BIOMAP e per tutte le specie native;",
         "- conserva i plot PNG del singolo run gia creati dalla pipeline forecast.",
         "",
         "## Scelta tecnica adottata",
         "",
-        "Nei fogli di dettaglio viene mostrato **il latest run** con colonne `lat`, `lon`, `observed`, `predicted`, `difference`, `MAE`, `RMSE`, `bias`, `correlation`, `relative_mae_pct`.",
+        "Nei fogli di dettaglio le righe restano ancorate alla griglia `lat/lon`, mentre ogni nuovo run aggiunge nuove colonne `observed__...`, `predicted__...`, `difference__...`, `MAE__...`, `RMSE__...`, `bias__...`, `correlation__...`, `relative_mae_pct__...`.",
         "",
-        "La parte storica completa resta nei fogli di sintesi. Questa scelta evita di far crescere il workbook oltre i limiti pratici di Excel quando i test sono Europe-wide e le celle sono decine di migliaia per mese.",
+        "La parte storica completa resta anche nei fogli di sintesi. L'aggiunta per colonne, invece che per nuove righe a ogni run, evita di superare troppo presto i limiti pratici di Excel sui test Europe-wide.",
         "",
-        "## Latest run usato per i fogli di dettaglio",
+        "Variabili principali incluse nei fogli di dettaglio:",
+        "- `Temperature_t2m`",
+        "- `Precipitation_tp`",
+        "- `Vegetation_NDVI`",
+        "- `Edaphic_swvl1`",
+        "- `Edaphic_swvl2`",
+        "- `Agriculture_Cropland`",
+        "- piu un foglio `Species_<id>` per ogni specie nativa disponibile",
+        "",
+        "## Run corrente usato come riferimento della griglia",
         "",
         f"- run_dir: `{latest_run_dir}`",
         f"- label: `{run_label(latest_manifest, latest_run_dir)}`",
@@ -687,7 +800,7 @@ def write_operational_report(
         "",
         f"- mesi presenti nelle metriche cumulative: `{months}`",
         f"- feature distinte nelle metriche cumulative: `{feature_count}`",
-        f"- fogli di dettaglio latest-run creati: `{len(feature_sheets)}`",
+        f"- fogli di dettaglio creati/aggiornati: `{len(feature_sheets)}`",
         f"- workbook scritto in: `{workbook_path}`",
         "",
         "## Prossimi step consigliati",
@@ -740,10 +853,11 @@ def update_biomap_final_workbook(
     feature_summary, species_summary = build_feature_summary(all_metrics, species_metrics)
     indicator_map = build_indicator_map(feature_summary)
     detail_sheets = build_latest_feature_sheets(
-        run_dir=current_run_dir,
-        manifest=manifest,
-        prediction_batch=prediction_batch,
-        observed_batch=observed_batch,
+        run_dirs=run_dirs,
+        current_run_dir=current_run_dir,
+        current_manifest=manifest,
+        current_prediction_batch=prediction_batch,
+        current_observed_batch=observed_batch,
     )
 
     sheets: OrderedDict[str, pd.DataFrame] = OrderedDict()

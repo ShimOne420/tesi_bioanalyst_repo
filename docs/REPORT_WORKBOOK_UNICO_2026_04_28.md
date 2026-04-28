@@ -53,50 +53,50 @@ Questi fogli vengono ricostruiti usando tutti i run trovati:
 - `Species_Biodiversity`
 - `All_Variables`
 
-### Fogli di dettaglio latest-run
+### Fogli di dettaglio cumulativi
 
-Per ogni feature disponibile nel batch native del run piu recente vengono creati fogli dedicati con dettaglio cella-per-cella.
+Per le variabili principali BIOMAP e per tutte le specie native vengono creati fogli dedicati con dettaglio cella-per-cella.
+
+Le righe restano sempre quelle della griglia BioAnalyst (`lat`, `lon`), mentre ogni nuovo run aggiunge nuove colonne alla stessa pagina.
 
 Per ogni foglio variabile sono presenti:
 
 - `lat`
 - `lon`
-- `observed`
-- `predicted`
-- `difference`
-- `abs_error`
-- `mae`
-- `rmse`
-- `bias`
-- `correlation`
-- `relative_mae_pct`
+- `observed__<run_id>`
+- `predicted__<run_id>`
+- `difference__<run_id>`
+- `abs_error__<run_id>`
+- `mae__<run_id>`
+- `rmse__<run_id>`
+- `bias__<run_id>`
+- `correlation__<run_id>`
+- `relative_mae_pct__<run_id>`
 
-In piu, quando la feature appartiene al gruppo `species`, vengono aggiunte anche metriche binarie:
+In piu, quando la feature appartiene al gruppo `species`, vengono aggiunte anche metriche binarie per ogni run:
 
-- `tp`
-- `fp`
-- `fn`
-- `tn`
-- `precision`
-- `recall`
-- `f1_score`
-- `jaccard_similarity`
-- `sorensen_similarity`
+- `tp__<run_id>`
+- `fp__<run_id>`
+- `fn__<run_id>`
+- `tn__<run_id>`
+- `precision__<run_id>`
+- `recall__<run_id>`
+- `f1_score__<run_id>`
+- `jaccard_similarity__<run_id>`
+- `sorensen_similarity__<run_id>`
 
 ## Scelta tecnica importante
 
-Non e stata implementata una cronologia completa cella-per-cella di **tutti** i run dentro ogni singolo foglio variabile.
+La cronologia cella-per-cella viene aggiunta **per colonne**, non per nuove righe.
 
 Motivo:
 
-con test Europe-wide e molte feature native, salvare ogni run come nuove righe dentro ogni pagina del workbook porterebbe molto rapidamente a limiti pratici di Excel per dimensione, numero di celle e tempi di apertura/salvataggio.
+con test Europe-wide, aggiungere 44.800 nuove righe per ogni run in ogni foglio porterebbe troppo presto a limiti pratici di Excel. Aggiungendo invece nuove colonne per run, il file resta unico, cumulativo e piu leggibile.
 
-Per questo la soluzione adottata e:
+La soluzione adottata e quindi:
 
 - **storico cumulativo** nelle pagine di sintesi;
-- **dettaglio cella-per-cella del latest run** nelle pagine variabile.
-
-Questa scelta mantiene il file unico, aggiornato e ancora utilizzabile.
+- **storico cumulativo per colonne** nelle pagine di dettaglio principali e specie.
 
 ## Verifiche fatte
 
