@@ -650,7 +650,9 @@ def build_latest_feature_sheets(
     cached_batches: dict[Path, tuple[Any, Any, dict[str, Any]]] = {
         current_run_dir: (current_prediction_batch, current_observed_batch, current_manifest)
     }
-    for run_dir in run_dirs:
+    total_runs = len(run_dirs)
+    for run_index, run_dir in enumerate(run_dirs, start=1):
+        print(f"[workbook] Preparo colonne cumulativi dal run {run_index}/{total_runs}: {run_dir.name}", flush=True)
         if run_dir in cached_batches:
             prediction_batch, observed_batch, manifest = cached_batches[run_dir]
         else:
@@ -715,34 +717,48 @@ def build_latest_feature_sheets(
 
 
 def write_workbook(path: Path, sheets: OrderedDict[str, pd.DataFrame]) -> Path:
-    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-    from openpyxl.utils import get_column_letter
+    from openpyxl import Workbook
+    from openpyxl.cell import WriteOnlyCell
+    from openpyxl.styles import Font, PatternFill
 
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f".{path.stem}.tmp.xlsx")
-    with pd.ExcelWriter(temp_path, engine="openpyxl") as writer:
-        for sheet_name, frame in sheets.items():
-            output = frame.copy()
-            for column in output.columns:
-                if pd.api.types.is_datetime64_any_dtype(output[column]):
-                    output[column] = output[column].dt.strftime("%Y-%m-%d")
-            output.to_excel(writer, sheet_name=sheet_name[:31], index=False)
-        workbook = writer.book
-        for sheet in workbook.worksheets:
-            sheet.freeze_panes = "A2"
-            if sheet.max_row > 1 and sheet.max_column > 1:
-                sheet.auto_filter.ref = sheet.dimensions
-            header_fill = PatternFill("solid", fgColor="17324D")
-            header_font = Font(color="FFFFFF", bold=True)
-            border = Border(bottom=Side(style="thin", color="D9E2EC"))
-            for cell in sheet[1]:
-                cell.fill = header_fill
-                cell.font = header_font
-                cell.border = border
-                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            for idx, cells in enumerate(sheet.columns, start=1):
-                max_len = max(len(str(cell.value)) if cell.value is not None else 0 for cell in list(cells)[:200])
-                sheet.column_dimensions[get_column_letter(idx)].width = min(max(max_len + 2, 10), 38)
+    workbook = Workbook(write_only=True)
+    header_fill = PatternFill("solid", fgColor="17324D")
+    header_font = Font(color="FFFFFF", bold=True)
+    total_sheets = len(sheets)
+
+    for sheet_index, (sheet_name, frame) in enumerate(sheets.items(), start=1):
+        print(
+            f"[workbook] Scrivo foglio {sheet_index}/{total_sheets}: {sheet_name} "
+            f"({len(frame):,} righe x {len(frame.columns):,} colonne)",
+            flush=True,
+        )
+        worksheet = workbook.create_sheet(title=sheet_name[:31])
+        header_row = []
+        for column_name in frame.columns:
+            cell = WriteOnlyCell(worksheet, value=column_name)
+            cell.fill = header_fill
+            cell.font = header_font
+            header_row.append(cell)
+        worksheet.append(header_row)
+
+        for row_index, row in enumerate(frame.itertuples(index=False, name=None), start=1):
+            values = []
+            for value in row:
+                if isinstance(value, pd.Timestamp):
+                    values.append(value.strftime("%Y-%m-%d"))
+                elif pd.isna(value):
+                    values.append(None)
+                else:
+                    values.append(value)
+            worksheet.append(values)
+            if row_index % 10000 == 0:
+                print(
+                    f"[workbook]   {sheet_name}: {row_index:,}/{len(frame):,} righe scritte",
+                    flush=True,
+                )
+    workbook.save(temp_path)
     try:
         temp_path.replace(path)
         return path
@@ -826,6 +842,7 @@ def update_biomap_final_workbook(
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     workbook_path = workbook_path or DEFAULT_WORKBOOK_PATH
     report_path = report_path or DEFAULT_REPORT_PATH
+    print(f"[workbook] Scansiono run storici in: {runs_root}", flush=True)
     run_dirs = iter_run_dirs(runs_root)
     if current_run_dir is not None and current_run_dir not in run_dirs:
         run_dirs.append(current_run_dir)
@@ -837,6 +854,7 @@ def update_biomap_final_workbook(
         )
     if not run_dirs:
         raise RuntimeError(f"Nessun run valido trovato sotto {runs_root}")
+    print(f"[workbook] Run validi trovati: {len(run_dirs)}", flush=True)
 
     if current_run_dir is None:
         current_run_dir = run_dirs[-1]
@@ -848,10 +866,14 @@ def update_biomap_final_workbook(
         observed_batch = ant.load_batch(current_run_dir / "native_target_original.pt")
 
     cached_batches = {current_run_dir: (prediction_batch, observed_batch, manifest)}
+    print("[workbook] Calcolo metriche cumulative", flush=True)
     all_metrics = load_all_metrics(run_dirs, current_batches=cached_batches)
+    print("[workbook] Calcolo metriche specie", flush=True)
     species_metrics = compute_species_summary(run_dirs)
+    print("[workbook] Costruisco fogli di sintesi", flush=True)
     feature_summary, species_summary = build_feature_summary(all_metrics, species_metrics)
     indicator_map = build_indicator_map(feature_summary)
+    print("[workbook] Costruisco fogli di dettaglio", flush=True)
     detail_sheets = build_latest_feature_sheets(
         run_dirs=run_dirs,
         current_run_dir=current_run_dir,
@@ -877,7 +899,9 @@ def update_biomap_final_workbook(
     if not species_summary.empty:
         species_summary.to_csv(OUT_DIR / "biomap_final_species_summary.csv", index=False, encoding="utf-8-sig")
 
+    print("[workbook] Scrittura workbook Excel", flush=True)
     written_workbook = write_workbook(workbook_path, sheets)
+    print(f"[workbook] Workbook scritto: {written_workbook}", flush=True)
     write_operational_report(
         path=report_path,
         workbook_path=written_workbook,
