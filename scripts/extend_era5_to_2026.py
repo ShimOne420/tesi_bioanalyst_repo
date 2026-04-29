@@ -291,12 +291,11 @@ def merge_with_existing(existing_path: Path, new_ds: xr.Dataset, target_name: st
     new_common = new_ds[list(common)].compute()
     merged_time = xr.concat([existing_common, new_common], dim="valid_time")
     merged_time = merged_time.sortby("valid_time")
-    merged = existing.drop_vars([v for v in existing.data_vars if v in common])
-    for var in merged_time.data_vars:
-        merged[var] = merged_time[var]
-    for var in new_ds.data_vars:
-        if var not in merged.data_vars:
-            merged[var] = new_ds[var]
+    extra_vars = set(new_ds.data_vars) - set(existing.data_vars)
+    merged = merged_time
+    for var in extra_vars:
+        merged[var] = new_ds[var]
+    existing_extra = set(existing.data_vars) - common - set(existing.data_vars)
     for attr in existing.attrs:
         if attr not in merged.attrs:
             merged.attrs[attr] = existing.attrs[attr]
