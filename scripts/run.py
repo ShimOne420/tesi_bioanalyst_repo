@@ -183,6 +183,12 @@ def build_parser():
         action="store_true",
         help="Non aggiorna il workbook finale BIOMAP a fine run.",
     )
+    parser.add_argument(
+        "--matrix-export-format",
+        choices=["excel", "csv", "both"],
+        default="excel",
+        help="Formato di export per i cell matrix delle feature principali e delle specie.",
+    )
     return parser
 
 
@@ -285,6 +291,14 @@ def plot_map(
 def write_excel_friendly_csv(path: Path, frame: pd.DataFrame) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(path, index=False, encoding="utf-8-sig", sep=";", decimal=",")
+
+
+def export_mode_wants_excel(mode: str) -> bool:
+    return mode in {"excel", "both"}
+
+
+def export_mode_wants_csv(mode: str) -> bool:
+    return mode in {"csv", "both"}
 
 
 def write_streaming_workbook(path: Path, sheets: OrderedDict[str, pd.DataFrame]) -> Path:
@@ -598,7 +612,7 @@ def export_feature_matrix_bundle(
     variable: str,
     unit: str,
     area_specs: list[dict[str, Any]],
-    export_csvs: bool = True,
+    matrix_export_format: str = "excel",
 ) -> tuple[dict[str, str], pd.DataFrame]:
     export_dir.mkdir(parents=True, exist_ok=True)
     bounds = manifest["bounds"]
@@ -637,30 +651,34 @@ def export_feature_matrix_bundle(
         run_dir=run_dir,
     )
 
-    workbook_path = export_dir / f"{workbook_prefix}_cell_matrix.xlsx"
-    area_summary_path = export_dir / f"{area_summary_prefix}_area_summary.xlsx"
-    with pd.ExcelWriter(workbook_path) as writer:
-        summary_frame.to_excel(writer, sheet_name="summary", index=False)
-        if alignment_diagnostic_frame is not None:
-            alignment_diagnostic_frame.to_excel(writer, sheet_name="alignment_diagnostic", index=False)
-        area_frame.to_excel(writer, sheet_name="selected_area", index=False)
-        frame.to_excel(writer, sheet_name="full_grid", index=False)
-    area_summary_frame.to_excel(area_summary_path, index=False)
-
-    outputs = {
-        "matrix_xlsx": str(workbook_path),
-        "area_summary_xlsx": str(area_summary_path),
-    }
-    if export_csvs:
-        full_csv_path = export_dir / f"{workbook_prefix}_cell_matrix_full_grid.csv"
-        area_csv_path = export_dir / f"{workbook_prefix}_cell_matrix_selected_area.csv"
-        area_summary_csv_path = export_dir / f"{area_summary_prefix}_area_summary.csv"
+    outputs: dict[str, str] = {}
+    if export_mode_wants_excel(matrix_export_format):
+        workbook_path = export_dir / f"{workbook_prefix}_cell_matrix.xlsx"
+        with pd.ExcelWriter(workbook_path) as writer:
+            summary_frame.to_excel(writer, sheet_name="summary", index=False)
+            area_summary_frame.to_excel(writer, sheet_name="area_summary", index=False)
+            if alignment_diagnostic_frame is not None:
+                alignment_diagnostic_frame.to_excel(writer, sheet_name="alignment_diagnostic", index=False)
+            area_frame.to_excel(writer, sheet_name="selected_area", index=False)
+            frame.to_excel(writer, sheet_name="full_grid", index=False)
+        outputs["matrix_xlsx"] = str(workbook_path)
+    if export_mode_wants_csv(matrix_export_format):
+        summary_csv_path = export_dir / f"{workbook_prefix}_summary.csv"
+        full_csv_path = export_dir / f"{workbook_prefix}_full_grid.csv"
+        area_csv_path = export_dir / f"{workbook_prefix}_selected_area.csv"
+        area_summary_csv_path = export_dir / f"{workbook_prefix}_area_summary.csv"
+        write_excel_friendly_csv(summary_csv_path, summary_frame)
         write_excel_friendly_csv(area_summary_csv_path, area_summary_frame)
         write_excel_friendly_csv(full_csv_path, frame)
         write_excel_friendly_csv(area_csv_path, area_frame)
-        outputs["matrix_full_csv"] = str(full_csv_path)
-        outputs["matrix_selected_area_csv"] = str(area_csv_path)
+        outputs["summary_csv"] = str(summary_csv_path)
+        outputs["full_grid_csv"] = str(full_csv_path)
+        outputs["selected_area_csv"] = str(area_csv_path)
         outputs["area_summary_csv"] = str(area_summary_csv_path)
+        if alignment_diagnostic_frame is not None:
+            alignment_csv_path = export_dir / f"{workbook_prefix}_alignment_diagnostic.csv"
+            write_excel_friendly_csv(alignment_csv_path, alignment_diagnostic_frame)
+            outputs["alignment_diagnostic_csv"] = str(alignment_csv_path)
     return outputs, area_summary_frame
 
 
@@ -672,6 +690,7 @@ def export_reliable_feature_workbooks(
     area_specs: list[dict[str, Any]],
     export_root: Path | None = None,
     flat_output: bool = False,
+    matrix_export_format: str = "excel",
 ) -> dict[str, Any]:
     export_root = export_root or (run_dir / "exports" / "reliable_feature_workbooks")
     predicted_batch = move_tensors_to_cpu(predicted_batch)
@@ -717,7 +736,7 @@ def export_reliable_feature_workbooks(
             variable=variable,
             unit=unit,
             area_specs=area_specs,
-            export_csvs=True,
+            matrix_export_format=matrix_export_format,
         )
         outputs["features"][file_prefix] = feature_outputs
     return outputs
@@ -731,6 +750,7 @@ def export_species_matrix_workbook(
     area_specs: list[dict[str, Any]],
     export_root: Path | None = None,
     flat_output: bool = False,
+    matrix_export_format: str = "excel",
 ) -> dict[str, str] | dict[str, Any]:
     if observed_batch is None:
         return {"reason": "observed batch mancante"}
@@ -835,15 +855,18 @@ def export_species_matrix_workbook(
     for name, frame in sheets.items():
         workbook_sheets[name] = frame
 
-    workbook_path = write_streaming_workbook(export_dir / "species_cell_matrix.xlsx", workbook_sheets)
-    summary_path = export_dir / "species_area_summary.xlsx"
-    summary_frame.to_excel(summary_path, index=False)
-    write_excel_friendly_csv(export_dir / "species_summary.csv", summary_frame)
-    return {
-        "matrix_xlsx": str(workbook_path),
-        "area_summary_xlsx": str(summary_path),
-        "summary_csv": str(export_dir / "species_summary.csv"),
-    }
+    outputs: dict[str, str] = {}
+    if export_mode_wants_excel(matrix_export_format):
+        workbook_path = write_streaming_workbook(export_dir / "species_cell_matrix.xlsx", workbook_sheets)
+        outputs["matrix_xlsx"] = str(workbook_path)
+    if export_mode_wants_csv(matrix_export_format):
+        write_excel_friendly_csv(export_dir / "species_summary.csv", summary_frame)
+        write_excel_friendly_csv(export_dir / "species_index.csv", index_frame)
+        for name, frame in sheets.items():
+            write_excel_friendly_csv(export_dir / f"{name}.csv", frame)
+        outputs["summary_csv"] = str(export_dir / "species_summary.csv")
+        outputs["index_csv"] = str(export_dir / "species_index.csv")
+    return outputs
 
 
 def build_area_summary_frame(
@@ -956,6 +979,7 @@ def export_maps_and_matrix(
     group: str,
     variable: str,
     area_specs: list[dict[str, Any]],
+    matrix_export_format: str = "excel",
 ) -> tuple[dict[str, str], pd.DataFrame]:
     plots_dir = run_dir / "plots"
     export_dir = run_dir / "exports"
@@ -1007,7 +1031,7 @@ def export_maps_and_matrix(
         variable=variable,
         unit=unit,
         area_specs=area_specs,
-        export_csvs=True,
+        matrix_export_format=matrix_export_format,
     )
     outputs.update(matrix_outputs)
     return outputs, area_summary_frame
@@ -1201,6 +1225,7 @@ def main() -> None:
         args.group,
         args.variable,
         area_specs,
+        matrix_export_format=args.matrix_export_format,
     )
     export_paths["reliable_feature_plots"] = export_reliable_feature_plots(
         context.run_dir,
@@ -1217,6 +1242,7 @@ def main() -> None:
         area_specs,
         export_root=previsioni_run_output_dir,
         flat_output=True,
+        matrix_export_format=args.matrix_export_format,
     )
     print("[extra] Esporto workbook Excel specie", flush=True)
     export_paths["species_matrix_workbook"] = export_species_matrix_workbook(
@@ -1227,6 +1253,7 @@ def main() -> None:
         area_specs,
         export_root=previsioni_run_output_dir,
         flat_output=True,
+        matrix_export_format=args.matrix_export_format,
     )
     if not args.no_history:
         default_history_name = (
