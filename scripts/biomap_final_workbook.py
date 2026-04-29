@@ -1138,11 +1138,15 @@ def update_biomap_final_workbook(
     manifest: dict[str, Any] | None = None,
     runs_root: Path = MODEL_FORECAST_ROOT,
     workbook_path: Path | None = DEFAULT_WORKBOOK_PATH,
-    report_path: Path | None = DEFAULT_REPORT_PATH,
+    report_path: Path | None = None,
 ) -> dict[str, Any]:
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
     workbook_path = workbook_path or DEFAULT_WORKBOOK_PATH
-    report_path = report_path or DEFAULT_REPORT_PATH
+    output_dir = workbook_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if report_path is None:
+        report_path = output_dir / DEFAULT_REPORT_PATH.name
+    if current_run_dir is not None:
+        runs_root = current_run_dir.parent
     print(f"[workbook] Scansiono run storici in: {runs_root}", flush=True)
     run_dirs = iter_run_dirs(runs_root)
     if current_run_dir is not None and current_run_dir not in run_dirs:
@@ -1207,15 +1211,15 @@ def update_biomap_final_workbook(
     for name, frame in detail_sheets.items():
         sheets[name] = frame
 
-    write_excel_friendly_csv(OUT_DIR / "biomap_final_all_metrics.csv", all_metrics)
-    write_excel_friendly_csv(OUT_DIR / "biomap_final_species_metrics.csv", species_metrics)
-    write_excel_friendly_csv(OUT_DIR / "biomap_final_feature_readiness.csv", feature_summary)
-    write_excel_friendly_csv(OUT_DIR / "biomap_final_indicator_map.csv", indicator_map)
+    write_excel_friendly_csv(output_dir / "biomap_final_all_metrics.csv", all_metrics)
+    write_excel_friendly_csv(output_dir / "biomap_final_species_metrics.csv", species_metrics)
+    write_excel_friendly_csv(output_dir / "biomap_final_feature_readiness.csv", feature_summary)
+    write_excel_friendly_csv(output_dir / "biomap_final_indicator_map.csv", indicator_map)
     if not species_summary.empty:
-        write_excel_friendly_csv(OUT_DIR / "biomap_final_species_summary.csv", species_summary)
-    write_excel_friendly_csv(OUT_DIR / "biomap_final_run_index.csv", run_index)
-    write_excel_friendly_csv(OUT_DIR / "biomap_final_city_area_index.csv", city_area_index)
-    write_excel_friendly_csv(OUT_DIR / "biomap_final_species_all.csv", species_all)
+        write_excel_friendly_csv(output_dir / "biomap_final_species_summary.csv", species_summary)
+    write_excel_friendly_csv(output_dir / "biomap_final_run_index.csv", run_index)
+    write_excel_friendly_csv(output_dir / "biomap_final_city_area_index.csv", city_area_index)
+    write_excel_friendly_csv(output_dir / "biomap_final_species_all.csv", species_all)
 
     print("[workbook] Scrittura workbook Excel", flush=True)
     written_workbook = write_workbook(workbook_path, sheets)
