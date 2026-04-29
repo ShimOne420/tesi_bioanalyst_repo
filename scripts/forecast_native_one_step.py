@@ -55,8 +55,15 @@ def main() -> None:
         args=args,
         project_output_dir=env["project_output_dir"],
         model_dir=env["model_dir"],
+        source_paths=env["source_paths"],
         run_suffix="native_one_step",
     )
+    if not context.months_info["compare_available"] and not args.no_compare_observed:
+        print(
+            "[warn] Target osservato non disponibile per il mese forecastato con le sorgenti locali correnti; "
+            "il run procedera senza confronto observed.",
+            flush=True,
+        )
     compare_month = (
         context.months_info["forecast_month"]
         if context.months_info["compare_available"] and not args.no_compare_observed

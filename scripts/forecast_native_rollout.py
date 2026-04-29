@@ -46,8 +46,15 @@ def main() -> None:
         args=args,
         project_output_dir=env["project_output_dir"],
         model_dir=env["model_dir"],
+        source_paths=env["source_paths"],
         run_suffix=f"native_rollout_{args.steps}m",
     )
+    if not context.months_info["compare_available"]:
+        print(
+            "[warn] Il target osservato del primo mese forecastato non e disponibile con le sorgenti locali correnti; "
+            "il rollout procedera senza target di confronto.",
+            flush=True,
+        )
     compare_month = context.months_info["forecast_month"] if context.months_info["compare_available"] else None
     print(f"[1/5] Setup native rollout pronto per `{context.label}` in `{context.run_dir}`", flush=True)
 
