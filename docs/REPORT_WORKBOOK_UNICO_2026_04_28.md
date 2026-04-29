@@ -2,49 +2,24 @@
 
 ## Obiettivo implementato
 
-Da ora la pipeline puo aggiornare sempre lo stesso workbook finale BIOMAP a fine run, invece di lasciare il file finale scollegato dal forecast appena eseguito.
+Il workbook finale BIOMAP viene aggiornato sempre sullo stesso file a fine run, ma con una struttura piu filtrabile e piu sostenibile per i test Europe-wide.
 
 Workbook canonico:
 
 `outputs/local_preview/model_forecast/SINTESI_AFFIDABILITA_MODEL_FORECAST_2017_2020/BIOMAP_FINAL_FEATURE_ANALYSIS_NATIVE_BIOANALYST.xlsx`
 
-## Cosa e stato fatto
+## Correzione architetturale
 
-### 1. Nuovo modulo dedicato
+La prima idea teneva nel workbook anche il dettaglio storico cella-per-cella di tutte le variabili principali e di tutte le specie. In pratica questo rendeva molto lenta la fase finale di scrittura Excel.
 
-E stato creato:
+La struttura aggiornata separa due livelli:
 
-`scripts/biomap_final_workbook.py`
-
-Questo modulo:
-
-- scansiona i run BioAnalyst disponibili sotto `outputs/local_preview/model_forecast`;
-- calcola le metriche cumulative su tutti i run trovati;
-- rigenera il workbook finale BIOMAP;
-- crea/aggiorna un documento operativo collegato.
-
-### 2. Aggancio automatico in `run.py`
-
-`scripts/run.py` ora richiama automaticamente il builder del workbook finale a fine forecast, salvo opt-out esplicito.
-
-Nuove opzioni CLI:
-
-- `--biomap-final-workbook`
-- `--no-biomap-final-workbook`
-
-### 3. Unificazione del rebuild manuale
-
-Lo script storico:
-
-`outputs/local_preview/model_forecast/SINTESI_AFFIDABILITA_MODEL_FORECAST_2017_2020/build_final_biomap_analysis.py`
-
-ora e un wrapper leggero che usa la stessa logica del nuovo modulo. Questo evita di avere due pipeline diverse per lo stesso file finale.
+- workbook finale filtrabile e leggibile;
+- storico full-grid esterno in CSV leggibili da Excel.
 
 ## Struttura attuale del workbook
 
-### Fogli cumulativi
-
-Questi fogli vengono ricostruiti usando tutti i run trovati:
+### Fogli cumulativi di sintesi
 
 - `Dashboard_BIOMAP`
 - `BIOMAP_Indicator_Map`
@@ -53,64 +28,134 @@ Questi fogli vengono ricostruiti usando tutti i run trovati:
 - `Species_Biodiversity`
 - `All_Variables`
 
-### Fogli di dettaglio cumulativi
+### Fogli indice
 
-Per le variabili principali BIOMAP e per tutte le specie native vengono creati fogli dedicati con dettaglio cella-per-cella.
+- `Run_Index`
+- `City_Area_Index`
+- `Species_Index`
 
-Le righe restano sempre quelle della griglia BioAnalyst (`lat`, `lon`), mentre ogni nuovo run aggiunge nuove colonne alla stessa pagina.
+### Fogli principali filtrabili
 
-Per ogni foglio variabile sono presenti:
+- `Temperature_t2m`
+- `Precipitation_tp`
+- `Vegetation_NDVI`
+- `Edaphic_swvl1`
+- `Edaphic_swvl2`
+- `Agriculture_Cropland`
 
-- `lat`
-- `lon`
-- `observed__<run_id>`
-- `predicted__<run_id>`
-- `difference__<run_id>`
-- `abs_error__<run_id>`
-- `mae__<run_id>`
-- `rmse__<run_id>`
-- `bias__<run_id>`
-- `correlation__<run_id>`
-- `relative_mae_pct__<run_id>`
+Ogni riga rappresenta un run su una certa area, quindi il file si puo filtrare per:
 
-In piu, quando la feature appartiene al gruppo `species`, vengono aggiunte anche metriche binarie per ogni run:
+- anno
+- mese
+- area/citta
+- variabile
+- checkpoint
+- input mode
 
-- `tp__<run_id>`
-- `fp__<run_id>`
-- `fn__<run_id>`
-- `tn__<run_id>`
-- `precision__<run_id>`
-- `recall__<run_id>`
-- `f1_score__<run_id>`
-- `jaccard_similarity__<run_id>`
-- `sorensen_similarity__<run_id>`
+Le colonne principali sono:
 
-## Scelta tecnica importante
+- `run_id`
+- `forecast_month`
+- `forecast_year`
+- `forecast_month_num`
+- `label`
+- `area_label`
+- `selection_mode`
+- `center_lat`
+- `center_lon`
+- `min_lat`
+- `max_lat`
+- `min_lon`
+- `max_lon`
+- `predicted_mean`
+- `observed_mean`
+- `predicted_min`
+- `predicted_max`
+- `observed_min`
+- `observed_max`
+- `mae`
+- `rmse`
+- `bias`
+- `correlation`
+- `relative_mae_pct`
 
-La cronologia cella-per-cella viene aggiunta **per colonne**, non per nuove righe.
+### Foglio unico specie
 
-Motivo:
+Le 28 specie non sono piu salvate come 28 fogli separati.
 
-con test Europe-wide, aggiungere 44.800 nuove righe per ogni run in ogni foglio porterebbe troppo presto a limiti pratici di Excel. Aggiungendo invece nuove colonne per run, il file resta unico, cumulativo e piu leggibile.
+Adesso esiste:
 
-La soluzione adottata e quindi:
+- `Species_All`
 
-- **storico cumulativo** nelle pagine di sintesi;
-- **storico cumulativo per colonne** nelle pagine di dettaglio principali e specie.
+Con una riga per:
 
-## Verifiche fatte
+- run
+- area
+- specie
 
-- compilazione Python riuscita con `py_compile`;
-- aggancio in `run.py` verificato sintatticamente;
-- wrapper storico riallineato alla nuova pipeline.
+Colonne principali:
 
-Nota:
+- `species_id`
+- `species_channel`
+- `tp`
+- `fp`
+- `fn`
+- `tn`
+- `precision`
+- `recall`
+- `f1_score`
+- `jaccard_similarity`
+- `sorensen_similarity`
+- `mae`
+- `rmse`
+- `bias`
+- `correlation`
+- `relative_mae_pct`
 
-il rebuild completo del workbook con fogli di dettaglio Europe-wide puo richiedere tempo significativo. La struttura e pronta, ma le performance reali vanno validate sulla macchina BioAnalyst principale durante un run reale.
+`Species_Index` serve invece come lookup iniziale degli ID specie. Per ora mostra gli ID dei canali target BioAnalyst; il nome scientifico potra essere aggiunto quando avremo una lookup tassonomica leggibile.
+
+## Storico full-grid esterno
+
+Il dettaglio cella-per-cella Europe-wide resta fuori dal workbook finale.
+
+Questo storico continua a essere utile per:
+
+- mappe;
+- verifiche locali;
+- analisi piu profonde;
+- futuro front-end.
+
+I file esterni principali sono:
+
+- `*_cell_matrix_full_grid.csv`
+- `*_cell_matrix_selected_area.csv`
+- `*_area_summary.csv`
+- `bioanalyst_native_full_output_group_csv/*.csv`
+- `biomap_final_*.csv`
+
+## CSV compatibili con Excel italiano
+
+Per evitare il problema "Excel apre tutto in una colonna", i CSV vengono ora scritti in formato Excel-friendly:
+
+- `encoding = utf-8-sig`
+- `sep = ;`
+- `decimal = ,`
+
+Quindi, quando apri il CSV in Excel italiano, le colonne dovrebbero gia risultare separate correttamente.
+
+## Risultato pratico
+
+Con questa struttura:
+
+- il workbook finale resta unico;
+- ogni run aggiunge nuovi dati senza creare workbook separati;
+- il filtro per anno/mese/area diventa realistico;
+- le specie sono consultabili in un'unica pagina;
+- il full-grid storico non si perde, ma non appesantisce il workbook finale.
 
 ## Prossimi step consigliati
 
-1. Validare un run reale end-to-end sulla macchina principale e misurare tempo di scrittura del workbook finale.
-2. Se il tempo e troppo alto, spostare lo storico cella-per-cella completo in CSV/Parquet e lasciare in Excel solo il latest run + le sintesi cumulative.
-3. Aggiungere l'export multi-feature tabellare del singolo run in `exports/reliable_features/`.
-4. Se vuoi una lettura biologica piu forte, estendere le specie con metriche threshold-specific piu esplicite per singola specie.
+1. Validare un run reale end-to-end con questa nuova struttura.
+2. Aggiungere una lookup tassonomica per `Species_Index`.
+3. Valutare un export multi-feature full-grid del singolo run, sempre in CSV Excel-friendly.
+4. Preparare un layer intermedio per citta/aree specifiche, utile al futuro front-end BIOMAP.

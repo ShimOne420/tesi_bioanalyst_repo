@@ -267,6 +267,11 @@ def plot_map(
     plt.close(fig)
 
 
+def write_excel_friendly_csv(path: Path, frame: pd.DataFrame) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path, index=False, encoding="utf-8-sig", sep=";", decimal=",")
+
+
 def export_reliable_feature_plots(
     run_dir: Path,
     manifest: dict[str, Any],
@@ -674,9 +679,9 @@ def export_maps_and_matrix(
         area_frame.to_excel(writer, sheet_name="selected_area", index=False)
         frame.to_excel(writer, sheet_name="full_grid", index=False)
     area_summary_frame.to_excel(area_summary_path, index=False)
-    area_summary_frame.to_csv(area_summary_csv_path, index=False, encoding="utf-8-sig")
-    frame.to_csv(full_csv_path, index=False, encoding="utf-8-sig")
-    area_frame.to_csv(area_csv_path, index=False, encoding="utf-8-sig")
+    write_excel_friendly_csv(area_summary_csv_path, area_summary_frame)
+    write_excel_friendly_csv(full_csv_path, frame)
+    write_excel_friendly_csv(area_csv_path, area_frame)
 
     outputs["matrix_xlsx"] = str(workbook_path)
     outputs["matrix_full_csv"] = str(full_csv_path)
@@ -788,7 +793,7 @@ def export_full_native_output(
                 align_prediction_latitude=latitude_flip,
                 align_prediction_longitude=longitude_flip,
             )
-            group_frame.to_csv(csv_dir / f"{group_name}_variables_grid.csv", index=False, encoding="utf-8-sig")
+            write_excel_friendly_csv(csv_dir / f"{group_name}_variables_grid.csv", group_frame)
         outputs["native_group_csv_dir"] = str(csv_dir)
 
     return outputs

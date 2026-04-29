@@ -490,6 +490,11 @@ def metric_guide() -> pd.DataFrame:
     )
 
 
+def write_excel_friendly_csv(path: Path, frame: pd.DataFrame) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path, index=False, encoding="utf-8-sig", sep=";", decimal=",")
+
+
 def base_grid_frame(latitudes: np.ndarray, longitudes: np.ndarray, bounds: dict[str, float] | None) -> pd.DataFrame:
     latitudes = np.asarray(latitudes, dtype=np.float32)
     longitudes = np.asarray(longitudes, dtype=np.float32)
@@ -513,6 +518,300 @@ def feature_binary_metrics(group: str, pred_display: np.ndarray, obs_display: np
         "binary_threshold": 0.5,
         **binary_scores(pred_display >= 0.5, obs_display >= 0.5),
     }
+
+
+def area_mask(latitudes: np.ndarray, longitudes: np.ndarray, bounds: dict[str, Any] | None) -> np.ndarray:
+    if not bounds:
+        return np.ones((latitudes.size, longitudes.size), dtype=bool)
+    lat_mask = (latitudes >= float(bounds["min_lat"])) & (latitudes <= float(bounds["max_lat"]))
+    lon_mask = (longitudes >= float(bounds["min_lon"])) & (longitudes <= float(bounds["max_lon"]))
+    return lat_mask[:, None] & lon_mask[None, :]
+
+
+def bounds_center(bounds: dict[str, Any] | None) -> tuple[float | None, float | None]:
+    if not bounds:
+        return None, None
+    return (
+        float(bounds["min_lat"] + bounds["max_lat"]) / 2.0,
+        float(bounds["min_lon"] + bounds["max_lon"]) / 2.0,
+    )
+
+
+def forecast_year_month(value: str | None) -> tuple[int | None, int | None]:
+    timestamp = safe_timestamp(value)
+    if timestamp is None or pd.isna(timestamp):
+        return None, None
+    return int(timestamp.year), int(timestamp.month)
+
+
+def run_index_frame(run_dirs: list[Path]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for run_dir in run_dirs:
+        manifest = load_json(run_dir / "forecast_native_manifest.json")
+        bounds = manifest.get("bounds")
+        center_lat, center_lon = bounds_center(bounds)
+        year, month = forecast_year_month(manifest.get("forecast_month"))
+        rows.append(
+            {
+                "run_id": detail_run_id(manifest, run_dir),
+                "label": run_label(manifest, run_dir),
+                "forecast_month": manifest.get("forecast_month"),
+                "forecast_year": year,
+                "forecast_month_num": month,
+                "input_month_1": (manifest.get("input_months") or [None, None])[0],
+                "input_month_2": (manifest.get("input_months") or [None, None])[1],
+                "checkpoint": manifest.get("checkpoint_kind"),
+                "input_mode": manifest.get("input_mode"),
+                "selection_mode": manifest.get("selection_mode"),
+                "area_label": manifest.get("label"),
+                "center_lat": center_lat,
+                "center_lon": center_lon,
+                "min_lat": None if not bounds else bounds.get("min_lat"),
+                "max_lat": None if not bounds else bounds.get("max_lat"),
+                "min_lon": None if not bounds else bounds.get("min_lon"),
+                "max_lon": None if not bounds else bounds.get("max_lon"),
+                "run_dir": str(run_dir),
+            }
+        )
+    frame = pd.DataFrame(rows)
+    if not frame.empty:
+        frame = frame.sort_values(["forecast_month", "label"], na_position="last")
+    return frame
+
+
+def city_area_index_frame(run_index: pd.DataFrame) -> pd.DataFrame:
+    if run_index.empty:
+        return pd.DataFrame(
+            columns=[
+                "area_label",
+                "selection_mode",
+                "center_lat",
+                "center_lon",
+                "min_lat",
+                "max_lat",
+                "min_lon",
+                "max_lon",
+                "run_count",
+                "first_forecast_month",
+                "last_forecast_month",
+            ]
+        )
+    grouped = (
+        run_index.groupby(
+            ["area_label", "selection_mode", "center_lat", "center_lon", "min_lat", "max_lat", "min_lon", "max_lon"],
+            dropna=False,
+        )
+        .agg(
+            run_count=("run_id", "nunique"),
+            first_forecast_month=("forecast_month", "min"),
+            last_forecast_month=("forecast_month", "max"),
+        )
+        .reset_index()
+    )
+    return grouped.sort_values(["area_label", "first_forecast_month"], na_position="last")
+
+
+def build_main_feature_area_sheets(
+    *,
+    run_dirs: list[Path],
+    current_run_dir: Path,
+    current_manifest: dict[str, Any],
+    current_prediction_batch: Any,
+    current_observed_batch: Any,
+) -> OrderedDict[str, pd.DataFrame]:
+    used_names: set[str] = {
+        "Dashboard_BIOMAP",
+        "BIOMAP_Indicator_Map",
+        "Coverage",
+        "Metric_Guide",
+        "All_Variables",
+        "Species_Biodiversity",
+        "Run_Index",
+        "City_Area_Index",
+        "Species_Index",
+        "Species_All",
+    }
+    sheets: OrderedDict[str, pd.DataFrame] = OrderedDict()
+    cached_batches: dict[Path, tuple[Any, Any, dict[str, Any]]] = {
+        current_run_dir: (current_prediction_batch, current_observed_batch, current_manifest)
+    }
+
+    for group_name, variable in sorted(MAIN_DETAIL_FEATURES):
+        sheet_name = workbook_sheet_name(group_name, variable, used_names)
+        rows: list[dict[str, Any]] = []
+        for run_dir in run_dirs:
+            if run_dir in cached_batches:
+                prediction_batch, observed_batch, manifest = cached_batches[run_dir]
+            else:
+                manifest = load_json(run_dir / "forecast_native_manifest.json")
+                prediction_batch = ant.load_batch(run_dir / "native_prediction_original.pt")
+                observed_batch = ant.load_batch(run_dir / "native_target_original.pt")
+                cached_batches[run_dir] = (prediction_batch, observed_batch, manifest)
+
+            pred_group = ant.get_group(prediction_batch, group_name)
+            obs_group = ant.get_group(observed_batch, group_name)
+            if variable not in pred_group or variable not in obs_group:
+                continue
+
+            latitudes = ant.as_1d(prediction_batch.batch_metadata.latitudes)
+            longitudes = ant.as_1d(prediction_batch.batch_metadata.longitudes)
+            bounds = manifest.get("bounds")
+            mask = area_mask(latitudes, longitudes, bounds)
+            lat_flip, lon_flip = ant.prediction_alignment_flags(manifest)
+            pred_map_native = ant.selected_maps(pred_group[variable])[0][1]
+            obs_map_native = ant.selected_maps(obs_group[variable])[0][1]
+            pred_map_native = ant.align_prediction(pred_map_native, latitude_flip=lat_flip, longitude_flip=lon_flip)
+            pred_display, unit = ant.convert_display_values(variable, pred_map_native)
+            obs_display, _ = ant.convert_display_values(variable, obs_map_native)
+            pred_area = pred_display[mask]
+            obs_area = obs_display[mask]
+            metrics = ant.compute_metrics(pred_area, obs_area)
+            center_lat, center_lon = bounds_center(bounds)
+            year, month = forecast_year_month(manifest.get("forecast_month"))
+            rows.append(
+                {
+                    "run_id": detail_run_id(manifest, run_dir),
+                    "forecast_month": manifest.get("forecast_month"),
+                    "forecast_year": year,
+                    "forecast_month_num": month,
+                    "label": run_label(manifest, run_dir),
+                    "area_label": manifest.get("label"),
+                    "selection_mode": manifest.get("selection_mode"),
+                    "center_lat": center_lat,
+                    "center_lon": center_lon,
+                    "min_lat": None if not bounds else bounds.get("min_lat"),
+                    "max_lat": None if not bounds else bounds.get("max_lat"),
+                    "min_lon": None if not bounds else bounds.get("min_lon"),
+                    "max_lon": None if not bounds else bounds.get("max_lon"),
+                    "grid_cell_count": int(latitudes.size * longitudes.size),
+                    "selected_area_cell_count": int(mask.sum()),
+                    "group": group_name,
+                    "variable": variable,
+                    "unit": unit,
+                    "predicted_mean": metrics["predicted_mean"],
+                    "observed_mean": metrics["observed_mean"],
+                    "predicted_min": float(np.nanmin(pred_area)) if pred_area.size else math.nan,
+                    "predicted_max": float(np.nanmax(pred_area)) if pred_area.size else math.nan,
+                    "observed_min": float(np.nanmin(obs_area)) if obs_area.size else math.nan,
+                    "observed_max": float(np.nanmax(obs_area)) if obs_area.size else math.nan,
+                    "mae": metrics["mae"],
+                    "rmse": metrics["rmse"],
+                    "bias": metrics["bias"],
+                    "correlation": metrics["correlation"],
+                    "relative_mae_pct": metrics["relative_mae_pct"],
+                    "biomap_readiness": readiness(group_name, variable, metrics["mae"], metrics["bias"], metrics["correlation"], metrics["relative_mae_pct"]),
+                    "checkpoint": manifest.get("checkpoint_kind"),
+                    "input_mode": manifest.get("input_mode"),
+                    "source_status": manifest.get("group_source_status", {}).get(group_name),
+                    "run_dir": str(run_dir),
+                }
+            )
+        frame = pd.DataFrame(rows)
+        if not frame.empty:
+            frame = frame.sort_values(["forecast_month", "area_label"], na_position="last")
+        sheets[sheet_name] = frame
+    return sheets
+
+
+def build_species_all_sheet(
+    *,
+    run_dirs: list[Path],
+    current_run_dir: Path,
+    current_manifest: dict[str, Any],
+    current_prediction_batch: Any,
+    current_observed_batch: Any,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    cached_batches: dict[Path, tuple[Any, Any, dict[str, Any]]] = {
+        current_run_dir: (current_prediction_batch, current_observed_batch, current_manifest)
+    }
+    for run_dir in run_dirs:
+        if run_dir in cached_batches:
+            prediction_batch, observed_batch, manifest = cached_batches[run_dir]
+        else:
+            manifest = load_json(run_dir / "forecast_native_manifest.json")
+            prediction_batch = ant.load_batch(run_dir / "native_prediction_original.pt")
+            observed_batch = ant.load_batch(run_dir / "native_target_original.pt")
+            cached_batches[run_dir] = (prediction_batch, observed_batch, manifest)
+
+        bounds = manifest.get("bounds")
+        latitudes = ant.as_1d(prediction_batch.batch_metadata.latitudes)
+        longitudes = ant.as_1d(prediction_batch.batch_metadata.longitudes)
+        mask = area_mask(latitudes, longitudes, bounds)
+        center_lat, center_lon = bounds_center(bounds)
+        year, month = forecast_year_month(manifest.get("forecast_month"))
+        lat_flip, lon_flip = ant.prediction_alignment_flags(manifest)
+        pred_group = ant.get_group(prediction_batch, "species")
+        obs_group = ant.get_group(observed_batch, "species")
+        for species_id in sorted(pred_group):
+            if species_id not in obs_group:
+                continue
+            pred_map_native = ant.selected_maps(pred_group[species_id])[0][1]
+            obs_map_native = ant.selected_maps(obs_group[species_id])[0][1]
+            pred_map_native = ant.align_prediction(pred_map_native, latitude_flip=lat_flip, longitude_flip=lon_flip)
+            pred_display, unit = ant.convert_display_values(species_id, pred_map_native)
+            obs_display, _ = ant.convert_display_values(species_id, obs_map_native)
+            pred_area = pred_display[mask]
+            obs_area = obs_display[mask]
+            metrics = ant.compute_metrics(pred_area, obs_area)
+            binary = binary_scores(pred_area >= 0.5, obs_area >= 0.5)
+            rows.append(
+                {
+                    "run_id": detail_run_id(manifest, run_dir),
+                    "forecast_month": manifest.get("forecast_month"),
+                    "forecast_year": year,
+                    "forecast_month_num": month,
+                    "label": run_label(manifest, run_dir),
+                    "area_label": manifest.get("label"),
+                    "selection_mode": manifest.get("selection_mode"),
+                    "center_lat": center_lat,
+                    "center_lon": center_lon,
+                    "species_id": species_id,
+                    "species_channel": species_id,
+                    "unit": unit,
+                    "selected_area_cell_count": int(mask.sum()),
+                    "predicted_mean": metrics["predicted_mean"],
+                    "observed_mean": metrics["observed_mean"],
+                    "mae": metrics["mae"],
+                    "rmse": metrics["rmse"],
+                    "bias": metrics["bias"],
+                    "correlation": metrics["correlation"],
+                    "relative_mae_pct": metrics["relative_mae_pct"],
+                    "tp": binary["tp"],
+                    "fp": binary["fp"],
+                    "fn": binary["fn"],
+                    "tn": binary["tn"],
+                    "precision": binary["precision"],
+                    "recall": binary["recall"],
+                    "f1_score": binary["f1_score"],
+                    "jaccard_similarity": binary["jaccard_similarity"],
+                    "sorensen_similarity": binary["sorensen_similarity"],
+                    "checkpoint": manifest.get("checkpoint_kind"),
+                    "input_mode": manifest.get("input_mode"),
+                    "run_dir": str(run_dir),
+                }
+            )
+    frame = pd.DataFrame(rows)
+    if not frame.empty:
+        frame = frame.sort_values(["forecast_month", "species_id", "area_label"], na_position="last")
+    return frame
+
+
+def build_species_index_frame(current_prediction_batch: Any) -> pd.DataFrame:
+    species_group = ant.get_group(current_prediction_batch, "species")
+    rows = []
+    for index, species_id in enumerate(sorted(species_group), start=1):
+        rows.append(
+            {
+                "species_order": index,
+                "species_id": species_id,
+                "species_channel": species_id,
+                "scientific_name": None,
+                "common_name": None,
+                "note": "ID specie dal canale target BioAnalyst; lookup tassonomica leggibile da aggiungere quando disponibile.",
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def build_feature_sheet(
@@ -786,23 +1085,25 @@ def write_operational_report(
         "",
         "- aggiorna sempre lo stesso workbook finale BIOMAP;",
         "- mantiene fogli cumulativi di sintesi (`Coverage`, `Metric_Guide`, `Dashboard_BIOMAP`, `BIOMAP_Indicator_Map`, `All_Variables`, `Species_Biodiversity`);",
-        "- aggiorna i fogli di dettaglio cella-per-cella nello stesso workbook, aggiungendo nuovi dati run-per-run solo per le variabili principali BIOMAP e per tutte le specie native;",
-        "- conserva i plot PNG del singolo run gia creati dalla pipeline forecast.",
+        "- aggiunge fogli indice filtrabili (`Run_Index`, `City_Area_Index`, `Species_Index`);",
+        "- salva le variabili principali in formato long filtrabile per run/mese/area;",
+        "- raggruppa tutte le specie in un unico foglio `Species_All`;",
+        "- lascia il full-grid storico nei CSV esterni del singolo run, cosi Excel finale resta leggibile.",
         "",
         "## Scelta tecnica adottata",
         "",
-        "Nei fogli di dettaglio le righe restano ancorate alla griglia `lat/lon`, mentre ogni nuovo run aggiunge nuove colonne `observed__...`, `predicted__...`, `difference__...`, `MAE__...`, `RMSE__...`, `bias__...`, `correlation__...`, `relative_mae_pct__...`.",
+        "Il workbook finale non contiene piu tutto lo storico Europe-wide cella-per-cella, perche Excel non regge bene quella crescita su molti mesi e molte feature.",
         "",
-        "La parte storica completa resta anche nei fogli di sintesi. L'aggiunta per colonne, invece che per nuove righe a ogni run, evita di superare troppo presto i limiti pratici di Excel sui test Europe-wide.",
+        "Il dettaglio storico completo resta nei CSV esterni del singolo run. Nel workbook finale entrano invece tabelle compatte e filtrabili per mese, anno, area e specie.",
         "",
-        "Variabili principali incluse nei fogli di dettaglio:",
+        "Variabili principali incluse nei fogli filtrabili:",
         "- `Temperature_t2m`",
         "- `Precipitation_tp`",
         "- `Vegetation_NDVI`",
         "- `Edaphic_swvl1`",
         "- `Edaphic_swvl2`",
         "- `Agriculture_Cropland`",
-        "- piu un foglio `Species_<id>` per ogni specie nativa disponibile",
+        "- `Species_All`",
         "",
         "## Run corrente usato come riferimento della griglia",
         "",
@@ -816,14 +1117,14 @@ def write_operational_report(
         "",
         f"- mesi presenti nelle metriche cumulative: `{months}`",
         f"- feature distinte nelle metriche cumulative: `{feature_count}`",
-        f"- fogli di dettaglio creati/aggiornati: `{len(feature_sheets)}`",
+        f"- fogli dati creati/aggiornati: `{len(feature_sheets)}`",
         f"- workbook scritto in: `{workbook_path}`",
         "",
         "## Prossimi step consigliati",
         "",
-        "1. Agganciare anche l'export tabellare multi-feature del singolo run dentro `exports/reliable_features/`.",
-        "2. Valutare un archivio CSV/Parquet storico cella-per-cella fuori da Excel, cosi da tenere storico completo senza limiti di workbook.",
-        "3. Migliorare i fogli specie con metriche threshold-specific piu esplicite per singola specie, se ti serve una lettura biologica piu fine.",
+        "1. Aggiungere lookup tassonomica leggibile per `Species_Index`.",
+        "2. Agganciare un export multi-feature full-grid del singolo run in CSV Excel-friendly.",
+        "3. Aggiungere eventuali estrazioni per citta specifiche dentro il workbook finale, senza appesantire il full-Europe.",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -874,30 +1175,47 @@ def update_biomap_final_workbook(
     feature_summary, species_summary = build_feature_summary(all_metrics, species_metrics)
     indicator_map = build_indicator_map(feature_summary)
     print("[workbook] Costruisco fogli di dettaglio", flush=True)
-    detail_sheets = build_latest_feature_sheets(
+    run_index = run_index_frame(run_dirs)
+    city_area_index = city_area_index_frame(run_index)
+    detail_sheets = build_main_feature_area_sheets(
         run_dirs=run_dirs,
         current_run_dir=current_run_dir,
         current_manifest=manifest,
         current_prediction_batch=prediction_batch,
         current_observed_batch=observed_batch,
     )
+    species_all = build_species_all_sheet(
+        run_dirs=run_dirs,
+        current_run_dir=current_run_dir,
+        current_manifest=manifest,
+        current_prediction_batch=prediction_batch,
+        current_observed_batch=observed_batch,
+    )
+    species_index = build_species_index_frame(prediction_batch)
 
     sheets: OrderedDict[str, pd.DataFrame] = OrderedDict()
     sheets["Dashboard_BIOMAP"] = feature_summary
     sheets["BIOMAP_Indicator_Map"] = indicator_map
     sheets["Coverage"] = coverage_from_metrics(all_metrics)
     sheets["Metric_Guide"] = metric_guide()
+    sheets["Run_Index"] = run_index
+    sheets["City_Area_Index"] = city_area_index
+    sheets["Species_Index"] = species_index
     sheets["Species_Biodiversity"] = species_metrics
+    sheets["Species_All"] = species_all
     sheets["All_Variables"] = all_metrics
     for name, frame in detail_sheets.items():
         sheets[name] = frame
 
-    all_metrics.to_csv(OUT_DIR / "biomap_final_all_metrics.csv", index=False, encoding="utf-8-sig")
-    species_metrics.to_csv(OUT_DIR / "biomap_final_species_metrics.csv", index=False, encoding="utf-8-sig")
-    feature_summary.to_csv(OUT_DIR / "biomap_final_feature_readiness.csv", index=False, encoding="utf-8-sig")
-    indicator_map.to_csv(OUT_DIR / "biomap_final_indicator_map.csv", index=False, encoding="utf-8-sig")
+    write_excel_friendly_csv(OUT_DIR / "biomap_final_all_metrics.csv", all_metrics)
+    write_excel_friendly_csv(OUT_DIR / "biomap_final_species_metrics.csv", species_metrics)
+    write_excel_friendly_csv(OUT_DIR / "biomap_final_feature_readiness.csv", feature_summary)
+    write_excel_friendly_csv(OUT_DIR / "biomap_final_indicator_map.csv", indicator_map)
     if not species_summary.empty:
-        species_summary.to_csv(OUT_DIR / "biomap_final_species_summary.csv", index=False, encoding="utf-8-sig")
+        write_excel_friendly_csv(OUT_DIR / "biomap_final_species_summary.csv", species_summary)
+    write_excel_friendly_csv(OUT_DIR / "biomap_final_run_index.csv", run_index)
+    write_excel_friendly_csv(OUT_DIR / "biomap_final_city_area_index.csv", city_area_index)
+    write_excel_friendly_csv(OUT_DIR / "biomap_final_species_all.csv", species_all)
 
     print("[workbook] Scrittura workbook Excel", flush=True)
     written_workbook = write_workbook(workbook_path, sheets)
@@ -915,8 +1233,8 @@ def update_biomap_final_workbook(
         "report": str(report_path),
         "runs_used": len(run_dirs),
         "latest_run": str(current_run_dir),
-        "detail_sheet_count": len(detail_sheets),
-        "summary_sheet_count": 6,
+        "detail_sheet_count": len(detail_sheets) + 1,
+        "summary_sheet_count": 10,
     }
 
 

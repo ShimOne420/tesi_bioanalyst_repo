@@ -377,6 +377,11 @@ def write_excel_with_fallback(path: Path, sheets: dict[str, pd.DataFrame]) -> Pa
         return fallback
 
 
+def write_excel_friendly_csv(path: Path, frame: pd.DataFrame) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path, index=False, encoding="utf-8-sig", sep=";", decimal=",")
+
+
 def main() -> None:
     args = build_parser().parse_args()
     manifest, batch_path, batch, observed_path = resolve_inputs(args)
@@ -473,7 +478,7 @@ def main() -> None:
                 align_prediction_longitude=align_prediction_longitude,
             )
             csv_path = csv_dir / f"{group_name}_variables_grid.csv"
-            group_frame.to_csv(csv_path, index=False, encoding="utf-8-sig")
+            write_excel_friendly_csv(csv_path, group_frame)
             csv_paths.append(csv_path)
 
     print("\nBioAnalyst native output")
