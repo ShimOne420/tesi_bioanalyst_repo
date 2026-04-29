@@ -13,6 +13,7 @@ import json
 import math
 import os
 import inspect
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -272,6 +273,56 @@ def write_excel_friendly_csv(path: Path, frame: pd.DataFrame) -> None:
     frame.to_csv(path, index=False, encoding="utf-8-sig", sep=";", decimal=",")
 
 
+def write_streaming_workbook(path: Path, sheets: OrderedDict[str, pd.DataFrame]) -> Path:
+    from openpyxl import Workbook
+    from openpyxl.cell import WriteOnlyCell
+    from openpyxl.styles import Font, PatternFill
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook(write_only=True)
+    header_fill = PatternFill("solid", fgColor="17324D")
+    header_font = Font(color="FFFFFF", bold=True)
+    total_sheets = len(sheets)
+
+    for sheet_index, (sheet_name, frame) in enumerate(sheets.items(), start=1):
+        print(
+            f"[excel] Scrivo foglio {sheet_index}/{total_sheets}: {sheet_name} "
+            f"({len(frame):,} righe x {len(frame.columns):,} colonne)",
+            flush=True,
+        )
+        worksheet = workbook.create_sheet(title=sheet_name[:31])
+        header_row = []
+        for column_name in frame.columns:
+            cell = WriteOnlyCell(worksheet, value=column_name)
+            cell.fill = header_fill
+            cell.font = header_font
+            header_row.append(cell)
+        worksheet.append(header_row)
+
+        for row_index, row in enumerate(frame.itertuples(index=False, name=None), start=1):
+            values = []
+            for value in row:
+                if isinstance(value, pd.Timestamp):
+                    values.append(value.strftime("%Y-%m-%d"))
+                elif pd.isna(value):
+                    values.append(None)
+                else:
+                    values.append(value)
+            worksheet.append(values)
+            if row_index % 10000 == 0:
+                print(f"[excel]   {sheet_name}: {row_index:,}/{len(frame):,} righe", flush=True)
+
+    temp_path = path.with_name(f".{path.stem}.tmp.xlsx")
+    workbook.save(temp_path)
+    try:
+        temp_path.replace(path)
+        return path
+    except PermissionError:
+        fallback = path.with_name(f"{path.stem}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+        temp_path.replace(fallback)
+        return fallback
+
+
 def export_reliable_feature_plots(
     run_dir: Path,
     manifest: dict[str, Any],
@@ -390,6 +441,32 @@ def build_cell_frame(
     return pd.DataFrame.from_records(rows)
 
 
+def compute_binary_summary(predicted_values: np.ndarray, observed_values: np.ndarray, threshold: float = 0.5) -> dict[str, Any]:
+    pred_mask = np.asarray(predicted_values) >= threshold
+    obs_mask = np.asarray(observed_values) >= threshold
+    tp = int(np.logical_and(pred_mask, obs_mask).sum())
+    fp = int(np.logical_and(pred_mask, ~obs_mask).sum())
+    fn = int(np.logical_and(~pred_mask, obs_mask).sum())
+    tn = int(np.logical_and(~pred_mask, ~obs_mask).sum())
+    precision = None if tp + fp == 0 else float(tp / (tp + fp))
+    recall = None if tp + fn == 0 else float(tp / (tp + fn))
+    f1 = None if (2 * tp + fp + fn) == 0 else float((2 * tp) / (2 * tp + fp + fn))
+    jaccard = None if (tp + fp + fn) == 0 else float(tp / (tp + fp + fn))
+    sorensen = f1
+    return {
+        "binary_threshold": threshold,
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+        "tn": tn,
+        "precision": precision,
+        "recall": recall,
+        "f1_score": f1,
+        "jaccard_similarity": jaccard,
+        "sorensen_similarity": sorensen,
+    }
+
+
 def parse_city_list(value: str) -> list[str]:
     """Legge una lista semplice tipo `Milan,Madrid,Paris`."""
     if not value:
@@ -489,6 +566,266 @@ def compute_summary(frame: pd.DataFrame, value_label: str, scope: str) -> dict[s
             }
         )
     return summary
+
+
+def export_feature_matrix_bundle(
+    *,
+    run_dir: Path,
+    export_dir: Path,
+    workbook_prefix: str,
+    area_summary_prefix: str,
+    manifest: dict[str, Any],
+    latitudes: np.ndarray,
+    longitudes: np.ndarray,
+    predicted_map: np.ndarray,
+    observed_map: np.ndarray | None,
+    predicted_map_raw: np.ndarray | None,
+    group: str,
+    variable: str,
+    unit: str,
+    area_specs: list[dict[str, Any]],
+    export_csvs: bool = True,
+) -> tuple[dict[str, str], pd.DataFrame]:
+    export_dir.mkdir(parents=True, exist_ok=True)
+    bounds = manifest["bounds"]
+    latitude_flip = prediction_latitude_flip_enabled(manifest)
+    longitude_flip = prediction_longitude_flip_enabled(manifest)
+    alignment_diagnostic_frame = None
+    if predicted_map_raw is not None and observed_map is not None:
+        alignment_diagnostic_frame = build_alignment_diagnostic_frame(predicted_map_raw, observed_map)
+
+    value_label = f"{variable}_{unit.replace('°', '').lower()}"
+    frame = build_cell_frame(
+        latitudes=latitudes,
+        longitudes=longitudes,
+        predicted_map=predicted_map,
+        observed_map=observed_map,
+        bounds=bounds,
+        value_label=value_label,
+    )
+    area_frame = frame[frame["inside_selected_area"]].copy()
+    summary_frame = pd.DataFrame.from_records(
+        [
+            compute_summary(frame, value_label, "full_grid"),
+            compute_summary(area_frame, value_label, "selected_area"),
+        ]
+    )
+    summary_frame["prediction_latitude_flip_applied"] = bool(latitude_flip)
+    summary_frame["prediction_longitude_flip_applied"] = bool(longitude_flip)
+    area_summary_frame = build_area_summary_frame(
+        frame=frame,
+        value_label=value_label,
+        area_specs=area_specs,
+        manifest=manifest,
+        group=group,
+        variable=variable,
+        unit=unit,
+        run_dir=run_dir,
+    )
+
+    workbook_path = export_dir / f"{workbook_prefix}_cell_matrix.xlsx"
+    area_summary_path = export_dir / f"{area_summary_prefix}_area_summary.xlsx"
+    with pd.ExcelWriter(workbook_path) as writer:
+        summary_frame.to_excel(writer, sheet_name="summary", index=False)
+        if alignment_diagnostic_frame is not None:
+            alignment_diagnostic_frame.to_excel(writer, sheet_name="alignment_diagnostic", index=False)
+        area_frame.to_excel(writer, sheet_name="selected_area", index=False)
+        frame.to_excel(writer, sheet_name="full_grid", index=False)
+    area_summary_frame.to_excel(area_summary_path, index=False)
+
+    outputs = {
+        "matrix_xlsx": str(workbook_path),
+        "area_summary_xlsx": str(area_summary_path),
+    }
+    if export_csvs:
+        full_csv_path = export_dir / f"{workbook_prefix}_cell_matrix_full_grid.csv"
+        area_csv_path = export_dir / f"{workbook_prefix}_cell_matrix_selected_area.csv"
+        area_summary_csv_path = export_dir / f"{area_summary_prefix}_area_summary.csv"
+        write_excel_friendly_csv(area_summary_csv_path, area_summary_frame)
+        write_excel_friendly_csv(full_csv_path, frame)
+        write_excel_friendly_csv(area_csv_path, area_frame)
+        outputs["matrix_full_csv"] = str(full_csv_path)
+        outputs["matrix_selected_area_csv"] = str(area_csv_path)
+        outputs["area_summary_csv"] = str(area_summary_csv_path)
+    return outputs, area_summary_frame
+
+
+def export_reliable_feature_workbooks(
+    run_dir: Path,
+    manifest: dict[str, Any],
+    predicted_batch: Any,
+    observed_batch: Any | None,
+    area_specs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    export_root = run_dir / "exports" / "reliable_feature_workbooks"
+    predicted_batch = move_tensors_to_cpu(predicted_batch)
+    observed_batch = move_tensors_to_cpu(observed_batch) if observed_batch is not None else None
+    latitudes, longitudes = get_grid_coordinates(predicted_batch)
+    latitude_flip = prediction_latitude_flip_enabled(manifest)
+    longitude_flip = prediction_longitude_flip_enabled(manifest)
+    outputs: dict[str, Any] = {"root": str(export_root), "features": {}, "missing_features": []}
+
+    for feature in RELIABLE_PLOT_FEATURES:
+        group = feature["group"]
+        variable = feature["variable"]
+        file_prefix = feature["file_prefix"]
+        feature_dir = export_root / feature["folder"]
+        try:
+            predicted_map_raw, unit = get_batch_variable_map(predicted_batch, group_name=group, variable_name=variable)
+        except SystemExit as exc:
+            outputs["missing_features"].append({"group": group, "variable": variable, "reason": str(exc)})
+            continue
+        predicted_map = align_prediction_map(
+            predicted_map_raw,
+            latitude_flip=latitude_flip,
+            longitude_flip=longitude_flip,
+        )
+        observed_map = None
+        if observed_batch is not None:
+            try:
+                observed_map, _ = get_batch_variable_map(observed_batch, group_name=group, variable_name=variable)
+            except SystemExit as exc:
+                outputs["missing_features"].append({"group": group, "variable": variable, "reason": str(exc)})
+        feature_outputs, _ = export_feature_matrix_bundle(
+            run_dir=run_dir,
+            export_dir=feature_dir,
+            workbook_prefix=file_prefix,
+            area_summary_prefix=file_prefix,
+            manifest=manifest,
+            latitudes=latitudes,
+            longitudes=longitudes,
+            predicted_map=predicted_map,
+            observed_map=observed_map,
+            predicted_map_raw=predicted_map_raw,
+            group=group,
+            variable=variable,
+            unit=unit,
+            area_specs=area_specs,
+            export_csvs=True,
+        )
+        outputs["features"][file_prefix] = feature_outputs
+    return outputs
+
+
+def export_species_matrix_workbook(
+    run_dir: Path,
+    manifest: dict[str, Any],
+    predicted_batch: Any,
+    observed_batch: Any | None,
+    area_specs: list[dict[str, Any]],
+) -> dict[str, str] | dict[str, Any]:
+    if observed_batch is None:
+        return {"reason": "observed batch mancante"}
+    export_dir = run_dir / "exports" / "reliable_feature_workbooks" / "species"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    predicted_batch = move_tensors_to_cpu(predicted_batch)
+    observed_batch = move_tensors_to_cpu(observed_batch)
+    latitudes, longitudes = get_grid_coordinates(predicted_batch)
+    latitude_flip = prediction_latitude_flip_enabled(manifest)
+    longitude_flip = prediction_longitude_flip_enabled(manifest)
+    species_group_pred = predicted_batch.species_variables
+    species_group_obs = observed_batch.species_variables
+
+    summary_rows: list[dict[str, Any]] = []
+    sheets: OrderedDict[str, pd.DataFrame] = OrderedDict()
+    index_rows: list[dict[str, Any]] = []
+
+    for species_id in sorted(species_group_pred):
+        if species_id not in species_group_obs:
+            continue
+        predicted_map_raw, unit = get_batch_variable_map(predicted_batch, group_name="species", variable_name=species_id)
+        observed_map, _ = get_batch_variable_map(observed_batch, group_name="species", variable_name=species_id)
+        predicted_map = align_prediction_map(
+            predicted_map_raw,
+            latitude_flip=latitude_flip,
+            longitude_flip=longitude_flip,
+        )
+        value_label = f"species_{species_id}"
+        frame = build_cell_frame(
+            latitudes=latitudes,
+            longitudes=longitudes,
+            predicted_map=predicted_map,
+            observed_map=observed_map,
+            bounds=manifest["bounds"],
+            value_label=value_label,
+        )
+        frame["species_id"] = species_id
+        frame["unit"] = unit
+        frame["forecast_month"] = manifest.get("forecast_month")
+        frame["label"] = manifest.get("label")
+        frame["group"] = "species"
+        frame["variable"] = species_id
+        frame["run_dir"] = str(run_dir)
+        frame["checkpoint"] = manifest.get("checkpoint_kind")
+        frame["input_mode"] = manifest.get("input_mode")
+        sheets[f"sp_{species_id}"] = frame
+
+        full_metrics = compute_summary(frame, value_label, "full_grid")
+        area_frame = frame[frame["inside_selected_area"]].copy()
+        area_metrics = compute_summary(area_frame, value_label, "selected_area")
+        binary_full = compute_binary_summary(frame[f"predicted_{value_label}"].to_numpy(), frame[f"observed_{value_label}"].to_numpy())
+        binary_area = compute_binary_summary(area_frame[f"predicted_{value_label}"].to_numpy(), area_frame[f"observed_{value_label}"].to_numpy())
+        summary_rows.append(
+            {
+                "forecast_month": manifest.get("forecast_month"),
+                "forecast_year": pd.Timestamp(manifest.get("forecast_month")).year if manifest.get("forecast_month") else None,
+                "forecast_month_num": pd.Timestamp(manifest.get("forecast_month")).month if manifest.get("forecast_month") else None,
+                "label": manifest.get("label"),
+                "area_label": manifest.get("label"),
+                "species_id": species_id,
+                "unit": unit,
+                "scope": "full_grid",
+                "checkpoint": manifest.get("checkpoint_kind"),
+                "input_mode": manifest.get("input_mode"),
+                "run_dir": str(run_dir),
+                **full_metrics,
+                **binary_full,
+            }
+        )
+        summary_rows.append(
+            {
+                "forecast_month": manifest.get("forecast_month"),
+                "forecast_year": pd.Timestamp(manifest.get("forecast_month")).year if manifest.get("forecast_month") else None,
+                "forecast_month_num": pd.Timestamp(manifest.get("forecast_month")).month if manifest.get("forecast_month") else None,
+                "label": manifest.get("label"),
+                "area_label": manifest.get("label"),
+                "species_id": species_id,
+                "unit": unit,
+                "scope": "selected_area",
+                "checkpoint": manifest.get("checkpoint_kind"),
+                "input_mode": manifest.get("input_mode"),
+                "run_dir": str(run_dir),
+                **area_metrics,
+                **binary_area,
+            }
+        )
+        index_rows.append(
+            {
+                "species_id": species_id,
+                "sheet_name": f"sp_{species_id}",
+                "scientific_name": None,
+                "common_name": None,
+                "note": "ID specie del canale target BioAnalyst",
+            }
+        )
+
+    summary_frame = pd.DataFrame(summary_rows)
+    index_frame = pd.DataFrame(index_rows)
+    workbook_sheets: OrderedDict[str, pd.DataFrame] = OrderedDict()
+    workbook_sheets["species_summary"] = summary_frame
+    workbook_sheets["species_index"] = index_frame
+    for name, frame in sheets.items():
+        workbook_sheets[name] = frame
+
+    workbook_path = write_streaming_workbook(export_dir / "species_cell_matrix.xlsx", workbook_sheets)
+    summary_path = export_dir / "species_area_summary.xlsx"
+    summary_frame.to_excel(summary_path, index=False)
+    write_excel_friendly_csv(export_dir / "species_summary.csv", summary_frame)
+    return {
+        "matrix_xlsx": str(workbook_path),
+        "area_summary_xlsx": str(summary_path),
+        "summary_csv": str(export_dir / "species_summary.csv"),
+    }
 
 
 def build_area_summary_frame(
@@ -637,57 +974,24 @@ def export_maps_and_matrix(
         outputs["observed_png"] = str(observed_png)
         outputs["difference_png"] = str(difference_png)
 
-    value_label = f"{variable}_{unit.replace('°', '').lower()}"
-    frame = build_cell_frame(
+    matrix_outputs, area_summary_frame = export_feature_matrix_bundle(
+        run_dir=run_dir,
+        export_dir=export_dir,
+        workbook_prefix=variable,
+        area_summary_prefix=variable,
+        manifest=manifest,
         latitudes=latitudes,
         longitudes=longitudes,
         predicted_map=predicted_map,
         observed_map=observed_map,
-        bounds=bounds,
-        value_label=value_label,
-    )
-    area_frame = frame[frame["inside_selected_area"]].copy()
-    summary_frame = pd.DataFrame.from_records(
-        [
-            compute_summary(frame, value_label, "full_grid"),
-            compute_summary(area_frame, value_label, "selected_area"),
-        ]
-    )
-    summary_frame["prediction_latitude_flip_applied"] = bool(latitude_flip)
-    summary_frame["prediction_longitude_flip_applied"] = bool(longitude_flip)
-    area_summary_frame = build_area_summary_frame(
-        frame=frame,
-        value_label=value_label,
-        area_specs=area_specs,
-        manifest=manifest,
+        predicted_map_raw=predicted_map_raw,
         group=group,
         variable=variable,
         unit=unit,
-        run_dir=run_dir,
+        area_specs=area_specs,
+        export_csvs=True,
     )
-
-    workbook_path = export_dir / f"{variable}_cell_matrix.xlsx"
-    full_csv_path = export_dir / f"{variable}_cell_matrix_full_grid.csv"
-    area_csv_path = export_dir / f"{variable}_cell_matrix_selected_area.csv"
-    area_summary_path = export_dir / f"{variable}_area_summary.xlsx"
-    area_summary_csv_path = export_dir / f"{variable}_area_summary.csv"
-
-    with pd.ExcelWriter(workbook_path) as writer:
-        summary_frame.to_excel(writer, sheet_name="summary", index=False)
-        if alignment_diagnostic_frame is not None:
-            alignment_diagnostic_frame.to_excel(writer, sheet_name="alignment_diagnostic", index=False)
-        area_frame.to_excel(writer, sheet_name="selected_area", index=False)
-        frame.to_excel(writer, sheet_name="full_grid", index=False)
-    area_summary_frame.to_excel(area_summary_path, index=False)
-    write_excel_friendly_csv(area_summary_csv_path, area_summary_frame)
-    write_excel_friendly_csv(full_csv_path, frame)
-    write_excel_friendly_csv(area_csv_path, area_frame)
-
-    outputs["matrix_xlsx"] = str(workbook_path)
-    outputs["matrix_full_csv"] = str(full_csv_path)
-    outputs["matrix_selected_area_csv"] = str(area_csv_path)
-    outputs["area_summary_xlsx"] = str(area_summary_path)
-    outputs["area_summary_csv"] = str(area_summary_csv_path)
+    outputs.update(matrix_outputs)
     return outputs, area_summary_frame
 
 
@@ -781,6 +1085,8 @@ def export_full_native_output(
     if export_group_csvs:
         csv_dir = export_dir / "bioanalyst_native_full_output_group_csv"
         csv_dir.mkdir(parents=True, exist_ok=True)
+        xlsx_dir = export_dir / "bioanalyst_native_full_output_group_xlsx"
+        xlsx_dir.mkdir(parents=True, exist_ok=True)
         for group_name in NATIVE_GROUP_FIELDS:
             group_frame = build_group_wide_frame(
                 predicted_batch,
@@ -794,7 +1100,10 @@ def export_full_native_output(
                 align_prediction_longitude=longitude_flip,
             )
             write_excel_friendly_csv(csv_dir / f"{group_name}_variables_grid.csv", group_frame)
+            with pd.ExcelWriter(xlsx_dir / f"{group_name}_variables_grid.xlsx") as writer:
+                group_frame.to_excel(writer, sheet_name="full_grid", index=False)
         outputs["native_group_csv_dir"] = str(csv_dir)
+        outputs["native_group_xlsx_dir"] = str(xlsx_dir)
 
     return outputs
 
@@ -879,6 +1188,22 @@ def main() -> None:
         manifest,
         result.predicted_batch_original,
         result.observed_batch_original,
+    )
+    print("[extra] Esporto workbook Excel aggiuntivi per feature principali", flush=True)
+    export_paths["reliable_feature_workbooks"] = export_reliable_feature_workbooks(
+        context.run_dir,
+        manifest,
+        result.predicted_batch_original,
+        result.observed_batch_original,
+        area_specs,
+    )
+    print("[extra] Esporto workbook Excel specie", flush=True)
+    export_paths["species_matrix_workbook"] = export_species_matrix_workbook(
+        context.run_dir,
+        manifest,
+        result.predicted_batch_original,
+        result.observed_batch_original,
+        area_specs,
     )
     if not args.no_history:
         default_history_name = (
