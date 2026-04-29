@@ -13,6 +13,7 @@ import json
 import math
 import os
 import inspect
+import shutil
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any
@@ -30,7 +31,7 @@ from omegaconf import OmegaConf
 
 from bioanalyst_model_utils import build_selection_parser
 from bioanalyst_model_utils import resolve_city_bounds
-from biomap_final_workbook import update_biomap_final_workbook
+from biomap_final_workbook import DEFAULT_WORKBOOK_NAME, update_biomap_final_workbook
 from bioanalyst_native_utils import (
     build_native_run_context,
     build_native_runtime,
@@ -95,6 +96,19 @@ RELIABLE_PLOT_FEATURES = [
         "cmap": "PuBu",
     },
 ]
+
+
+def previsioni_root_for_run(run_dir: Path) -> Path:
+    return run_dir.parent / "previsioni"
+
+
+def previsioni_month_dir(run_dir: Path, manifest: dict[str, Any]) -> Path:
+    forecast_month = str(manifest.get("forecast_month") or "").strip()
+    if forecast_month:
+        month_label = pd.Timestamp(forecast_month).strftime("%Y-%m")
+    else:
+        month_label = run_dir.name
+    return previsioni_root_for_run(run_dir) / month_label
 
 
 def build_parser():
@@ -656,8 +670,10 @@ def export_reliable_feature_workbooks(
     predicted_batch: Any,
     observed_batch: Any | None,
     area_specs: list[dict[str, Any]],
+    export_root: Path | None = None,
+    flat_output: bool = False,
 ) -> dict[str, Any]:
-    export_root = run_dir / "exports" / "reliable_feature_workbooks"
+    export_root = export_root or (run_dir / "exports" / "reliable_feature_workbooks")
     predicted_batch = move_tensors_to_cpu(predicted_batch)
     observed_batch = move_tensors_to_cpu(observed_batch) if observed_batch is not None else None
     latitudes, longitudes = get_grid_coordinates(predicted_batch)
@@ -669,7 +685,7 @@ def export_reliable_feature_workbooks(
         group = feature["group"]
         variable = feature["variable"]
         file_prefix = feature["file_prefix"]
-        feature_dir = export_root / feature["folder"]
+        feature_dir = export_root if flat_output else export_root / feature["folder"]
         try:
             predicted_map_raw, unit = get_batch_variable_map(predicted_batch, group_name=group, variable_name=variable)
         except SystemExit as exc:
@@ -713,10 +729,12 @@ def export_species_matrix_workbook(
     predicted_batch: Any,
     observed_batch: Any | None,
     area_specs: list[dict[str, Any]],
+    export_root: Path | None = None,
+    flat_output: bool = False,
 ) -> dict[str, str] | dict[str, Any]:
     if observed_batch is None:
         return {"reason": "observed batch mancante"}
-    export_dir = run_dir / "exports" / "reliable_feature_workbooks" / "species"
+    export_dir = export_root if flat_output else (export_root or (run_dir / "exports" / "reliable_feature_workbooks")) / "species"
     export_dir.mkdir(parents=True, exist_ok=True)
     predicted_batch = move_tensors_to_cpu(predicted_batch)
     observed_batch = move_tensors_to_cpu(observed_batch)
@@ -1174,6 +1192,7 @@ def main() -> None:
 
     print("[4/4] Esporto PNG e matrice Excel", flush=True)
     area_specs = build_area_specs(args, manifest)
+    previsioni_run_output_dir = previsioni_month_dir(context.run_dir, manifest)
     export_paths, area_summary_frame = export_maps_and_matrix(
         context.run_dir,
         manifest,
@@ -1196,6 +1215,8 @@ def main() -> None:
         result.predicted_batch_original,
         result.observed_batch_original,
         area_specs,
+        export_root=previsioni_run_output_dir,
+        flat_output=True,
     )
     print("[extra] Esporto workbook Excel specie", flush=True)
     export_paths["species_matrix_workbook"] = export_species_matrix_workbook(
@@ -1204,6 +1225,8 @@ def main() -> None:
         result.predicted_batch_original,
         result.observed_batch_original,
         area_specs,
+        export_root=previsioni_run_output_dir,
+        flat_output=True,
     )
     if not args.no_history:
         default_history_name = (
@@ -1230,13 +1253,22 @@ def main() -> None:
 
     if not args.no_biomap_final_workbook:
         print("[extra] Aggiorno workbook finale BIOMAP", flush=True)
+        biomap_workbook_path = (
+            args.biomap_final_workbook
+            if args.biomap_final_workbook is not None
+            else previsioni_root_for_run(context.run_dir) / DEFAULT_WORKBOOK_NAME
+        )
         export_paths["biomap_final_workbook"] = update_biomap_final_workbook(
             current_run_dir=context.run_dir,
             prediction_batch=result.predicted_batch_original,
             observed_batch=result.observed_batch_original,
             manifest=manifest,
-            workbook_path=args.biomap_final_workbook if args.biomap_final_workbook is not None else None,
+            workbook_path=biomap_workbook_path,
         )
+        workbook_snapshot_path = previsioni_run_output_dir / DEFAULT_WORKBOOK_NAME
+        workbook_snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(export_paths["biomap_final_workbook"]["workbook"], workbook_snapshot_path)
+        export_paths["biomap_final_workbook"]["workbook_snapshot"] = str(workbook_snapshot_path)
 
     print(
         json.dumps(
