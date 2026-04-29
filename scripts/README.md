@@ -50,6 +50,10 @@ Restano ancora placeholder:
 - `redlist`
 - `misc`
 
+### Estensione dati futuri
+
+- [extend_era5_to_2026.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/extend_era5_to_2026.py)
+
 ## Cosa E Stato Rimosso Di Proposito
 
 Dal ramo native abbiamo tolto:
@@ -68,6 +72,8 @@ Il motivo e semplice:
 ```bash
 source scripts/activate_bioanalyst_model.sh
 python scripts/check_project_setup.py
+python scripts/extend_era5_to_2026.py --years 2021 --dry-run
+python scripts/extend_era5_to_2026.py --years 2021 2022 2023 2024 --target all_monthly
 python scripts/audit_future_dataset_coverage.py --input-mode all --forecast-start 2020-07-01 --forecast-end 2021-12-01
 python scripts/forecast_native_one_step.py --city milano --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu
 python scripts/forecast_native_rollout.py --city milano --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu --steps 6
