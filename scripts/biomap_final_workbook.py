@@ -144,6 +144,17 @@ def iter_run_dirs(root: Path) -> list[Path]:
     return run_dirs
 
 
+def infer_runs_root(current_run_dir: Path | None, workbook_path: Path) -> Path:
+    if current_run_dir is not None:
+        for candidate in [current_run_dir, *current_run_dir.parents]:
+            if candidate.name.lower() == "model_forecast":
+                return candidate
+    parent = workbook_path.parent
+    if parent.name.startswith("SINTESI_") and parent.parent.exists():
+        return parent.parent
+    return MODEL_FORECAST_ROOT
+
+
 def workbook_sheet_name(group: str, variable: str, used_names: set[str]) -> str:
     if group == "species":
         base = f"Species_{variable}"
@@ -1145,8 +1156,7 @@ def update_biomap_final_workbook(
     output_dir.mkdir(parents=True, exist_ok=True)
     if report_path is None:
         report_path = output_dir / DEFAULT_REPORT_PATH.name
-    if current_run_dir is not None:
-        runs_root = current_run_dir.parent
+    runs_root = infer_runs_root(current_run_dir, workbook_path)
     print(f"[workbook] Scansiono run storici in: {runs_root}", flush=True)
     run_dirs = iter_run_dirs(runs_root)
     if current_run_dir is not None and current_run_dir not in run_dirs:
