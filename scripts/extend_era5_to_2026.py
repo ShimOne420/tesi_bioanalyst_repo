@@ -252,18 +252,26 @@ def aggregate_hourly_to_monthly(hourly_path: Path, target_name: str) -> xr.Datas
         return xr.concat(monthly_parts, dim="valid_time")
 
 
-def crop_to_existing_grid(new_ds: xr.Dataset, existing_path: Path) -> xr.Dataset:
-    with xr.open_dataset(existing_path, engine="netcdf4") as existing:
-        lat_min = float(existing["latitude"].min())
-        lat_max = float(existing["latitude"].max())
-        lon_min = float(existing["longitude"].min())
-        lon_max = float(existing["longitude"].max())
-    print(f"  Ritaglio nuova griglia a lat [{lat_min}, {lat_max}] lon [{lon_min}, {lon_max}]")
+MODEL_CROP_BOUNDS = {
+    "lat_min": 32.0,
+    "lat_max": 72.0,
+    "lon_min": -25.0,
+    "lon_max": 45.0,
+}
+
+
+def crop_to_model_grid(new_ds: xr.Dataset) -> xr.Dataset:
+    lat_min = MODEL_CROP_BOUNDS["lat_min"]
+    lat_max = MODEL_CROP_BOUNDS["lat_max"]
+    lon_min = MODEL_CROP_BOUNDS["lon_min"]
+    lon_max = MODEL_CROP_BOUNDS["lon_max"]
+    print(f"  Ritaglio a griglia modello: lat [{lat_min}, {lat_max}] lon [{lon_min}, {lon_max}]")
     if "latitude" in new_ds.dims:
         new_ds = new_ds.sel(latitude=slice(lat_max, lat_min))
     if "longitude" in new_ds.dims:
-        if new_ds["longitude"].max() > 180:
-            new_ds = new_ds.assign_coords(longitude=(new_ds["longitude"] + 180) % 360 - 180)
+        lon_vals = new_ds["longitude"].values
+        if lon_vals.max() > 180:
+            new_ds = new_ds.assign_coords(longitude=((lon_vals + 180) % 360 - 180))
             new_ds = new_ds.sortby("longitude")
         new_ds = new_ds.sel(longitude=slice(lon_min, lon_max))
     return new_ds
@@ -273,12 +281,15 @@ def merge_with_existing(existing_path: Path, new_ds: xr.Dataset, target_name: st
     print(f"  Fusione con esistente: {existing_path.name}")
     with xr.open_dataset(existing_path, engine="netcdf4") as existing:
         existing = existing.load()
-    new_ds = crop_to_existing_grid(new_ds, existing_path).load()
+    new_ds = crop_to_model_grid(new_ds).load()
+    existing = crop_to_model_grid(existing)
     common = set(existing.data_vars) & set(new_ds.data_vars)
     if not common:
         print(f"  [warn] Nessuna variabile in comune per {target_name}, salvo solo i nuovi dati.")
         return new_ds
-    merged_time = xr.concat([existing[list(common)], new_ds[list(common)]], dim="valid_time", join="inner")
+    existing_common = existing[list(common)].compute()
+    new_common = new_ds[list(common)].compute()
+    merged_time = xr.concat([existing_common, new_common], dim="valid_time")
     merged_time = merged_time.sortby("valid_time")
     merged = existing.drop_vars([v for v in existing.data_vars if v in common])
     for var in merged_time.data_vars:
