@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -126,6 +127,22 @@ CLIMATE_A_HOURLY_CONFIG: dict[str, Any] = {
     "output_dir": "Copernicus/ERA5-monthly/era5-climate-energy-moisture",
 }
 
+CLIMATE_A_HOURLY_SUBREQUESTS: dict[str, list[str]] = {
+    "bulk": [
+        "snowmelt",
+        "total_precipitation",
+        "convective_snowfall",
+        "surface_solar_radiation_downwards",
+        "surface_net_solar_radiation",
+        "surface_net_thermal_radiation",
+        "surface_solar_radiation_downwards_clear_sky",
+    ],
+    # Workaround ufficiale CDS: `mean_total_precipitation_rate` scaricato da solo.
+    "avg_tprate": [
+        "mean_total_precipitation_rate",
+    ],
+}
+
 MONTHLY_CHUNK_SIZE = 6
 
 VARIABLE_RENAME_MAP: dict[str, dict[str, str]] = {
@@ -198,6 +215,7 @@ def build_monthly_request(base: dict[str, Any], year_months: list[tuple[int, int
     request["month"] = [f"{m:02d}" for _, m in sorted(year_months, key=lambda x: (x[0], x[1]))]
     request["time"] = ["00:00"]
     request["data_format"] = "netcdf"
+    request["download_format"] = "unarchived"
     request["area"] = AREA
     request["grid"] = GRID
     return request
@@ -212,9 +230,45 @@ def build_hourly_request(base: dict[str, Any], year_months: list[tuple[int, int]
     request["date"] = date_parts
     request["time"] = [f"{h:02d}:00" for h in range(0, 24)]
     request["data_format"] = "netcdf"
+    request["download_format"] = "unarchived"
     request["area"] = AREA
     request["grid"] = GRID
     return request
+
+
+def materialize_download_payload(dl_path: Path) -> tuple[Path, list[Path]]:
+    """Rende leggibile l'output CDS anche se arriva archivato come zip."""
+    if not zipfile.is_zipfile(dl_path):
+        return dl_path, [dl_path]
+
+    extracted_dir = dl_path.parent / f"{dl_path.stem}_unzipped"
+    if extracted_dir.exists():
+        shutil.rmtree(extracted_dir)
+    extracted_dir.mkdir(parents=True, exist_ok=True)
+
+    with zipfile.ZipFile(dl_path) as archive:
+        archive.extractall(extracted_dir)
+        members = [member for member in archive.namelist() if not member.endswith("/")]
+
+    payload_candidates = [extracted_dir / member for member in members]
+    preferred = next((path for path in payload_candidates if path.suffix.lower() == ".nc"), None)
+    if preferred is None:
+        preferred = payload_candidates[0] if payload_candidates else None
+    if preferred is None or not preferred.exists():
+        raise FileNotFoundError(f"Archivio CDS senza file leggibili: {dl_path}")
+
+    print(f"  Archivio zip CDS rilevato, uso payload: {preferred.name}")
+    return preferred, [dl_path, extracted_dir]
+
+
+def cleanup_download_artifacts(paths: list[Path]) -> None:
+    for path in paths:
+        if not path.exists():
+            continue
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            path.unlink(missing_ok=True)
 
 
 def rename_and_clean(ds: xr.Dataset, target_name: str) -> xr.Dataset:
@@ -338,7 +392,8 @@ def download_and_merge_monthly(
         print(f"  [{target_name}] Download: {label}")
         client.retrieve(config["dataset"], request, str(dl_path))
 
-        with xr.open_dataset(dl_path, engine="netcdf4") as raw:
+        payload_path, cleanup_paths = materialize_download_payload(dl_path)
+        with xr.open_dataset(payload_path, engine="netcdf4") as raw:
             new_ds = rename_and_clean(raw.load(), target_name)
 
         merged = merge_with_existing(output_path, new_ds, target_name)
@@ -349,7 +404,7 @@ def download_and_merge_monthly(
         print(f"  Scrittura: {output_path}")
         encoding = {var: {"zlib": True, "complevel": 4} for var in merged.data_vars}
         merged.to_netcdf(output_path, encoding=encoding)
-        dl_path.unlink()
+        cleanup_download_artifacts(cleanup_paths)
         print(f"  Pulizia temp: {dl_path.name}")
 
     print(f"  [{target_name}] Completato.")
@@ -383,12 +438,21 @@ def download_and_merge_hourly(
             print(f"  [dry-run] {target_name}: {year}-{month:02d}")
             continue
 
-        request = build_hourly_request(config["request"], chunk)
-        dl_path = tmp_dir / f"{target_name}_{year}{month:02d}_hourly.nc"
         print(f"  [{target_name}] Download hourly: {year}-{month:02d}")
-        client.retrieve(config["dataset"], request, str(dl_path))
+        monthly_parts: list[xr.Dataset] = []
+        cleanup_targets: list[Path] = []
 
-        new_ds = aggregate_hourly_to_monthly(dl_path, "climate_a_hourly")
+        for subset_name, subset_variables in CLIMATE_A_HOURLY_SUBREQUESTS.items():
+            request = build_hourly_request(config["request"], chunk)
+            request["variable"] = subset_variables
+            dl_path = tmp_dir / f"{target_name}_{year}{month:02d}_{subset_name}.nc"
+            print(f"    subset {subset_name}: {', '.join(subset_variables)}")
+            client.retrieve(config["dataset"], request, str(dl_path))
+            payload_path, cleanup_paths = materialize_download_payload(dl_path)
+            cleanup_targets.extend(cleanup_paths)
+            monthly_parts.append(aggregate_hourly_to_monthly(payload_path, "climate_a_hourly"))
+
+        new_ds = xr.merge(monthly_parts, compat="override")
         merged = merge_with_existing(output_path, new_ds, target_name)
         backup = output_path.with_suffix(".nc.bak")
         if not backup.exists():
@@ -397,8 +461,8 @@ def download_and_merge_hourly(
         print(f"  Scrittura: {output_path}")
         encoding = {var: {"zlib": True, "complevel": 4} for var in merged.data_vars}
         merged.to_netcdf(output_path, encoding=encoding)
-        dl_path.unlink()
-        print(f"  Pulizia temp: {dl_path.name}")
+        cleanup_download_artifacts(cleanup_targets)
+        print(f"  Pulizia temp: climate_a_hourly_{year}{month:02d}_*.nc")
 
     print(f"  [{target_name}] Completato.")
 
