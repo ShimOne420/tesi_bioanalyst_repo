@@ -343,19 +343,27 @@ def crop_to_model_grid(new_ds: xr.Dataset) -> xr.Dataset:
     return new_ds
 
 
+def normalize_merge_coordinates(ds: xr.Dataset) -> xr.Dataset:
+    """Rimuove coordinate ausiliarie ERA5 che non devono bloccare la concat."""
+    drop_coord_names = [name for name in ("expver", "number") if name in ds.coords and name not in ds.dims]
+    if drop_coord_names:
+        ds = ds.drop_vars(drop_coord_names)
+    return ds
+
+
 def merge_with_existing(existing_path: Path, new_ds: xr.Dataset, target_name: str) -> xr.Dataset:
     print(f"  Fusione con esistente: {existing_path.name}")
     with xr.open_dataset(existing_path, engine="netcdf4") as existing:
         existing = existing.load()
-    new_ds = crop_to_model_grid(new_ds).load()
-    existing = crop_to_model_grid(existing)
+    new_ds = normalize_merge_coordinates(crop_to_model_grid(new_ds).load())
+    existing = normalize_merge_coordinates(crop_to_model_grid(existing))
     common = set(existing.data_vars) & set(new_ds.data_vars)
     if not common:
         print(f"  [warn] Nessuna variabile in comune per {target_name}, salvo solo i nuovi dati.")
         return new_ds
     existing_common = existing[list(common)].compute()
     new_common = new_ds[list(common)].compute()
-    merged_time = xr.concat([existing_common, new_common], dim="valid_time")
+    merged_time = xr.concat([existing_common, new_common], dim="valid_time", coords="minimal", compat="override")
     merged_time = merged_time.sortby("valid_time")
     extra_vars = set(new_ds.data_vars) - set(existing.data_vars)
     merged = merged_time
