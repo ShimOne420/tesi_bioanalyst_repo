@@ -25,9 +25,11 @@ import torch
 from bioanalyst_model_utils import (
     BFM_REPO_ROOT,
     PROJECT_ROOT,
+    assess_future_inference_availability,
     build_native_group_source_status,
     build_local_config,
     ensure_bfm_repo_on_path,
+    format_future_availability_error,
     load_project_env,
     raw_dict_to_batch,
     require_path,
@@ -172,6 +174,7 @@ def build_native_run_context(
     args,
     project_output_dir: Path,
     model_dir: Path,
+    source_paths: dict[str, Path],
     run_suffix: str,
 ) -> NativeRunContext:
     """Risolviamo area, periodo, checkpoint e cartelle di output del runner nativo."""
@@ -180,6 +183,18 @@ def build_native_run_context(
     device = resolve_torch_device(args.device)
     checkpoint_path = resolve_checkpoint_path(model_dir, args.checkpoint)
     input_mode = getattr(args, "input_mode", "all")
+    availability = assess_future_inference_availability(
+        source_paths,
+        input_prev=months_info["input_prev"],
+        input_last=months_info["input_last"],
+        forecast_month=months_info["forecast_month"],
+        input_mode=input_mode,
+    )
+    months_info["compare_available"] = availability["compare_available"]
+    months_info["forecast_allowed"] = availability["forecast_allowed"]
+    months_info["availability_report"] = availability
+    if not availability["forecast_allowed"]:
+        raise SystemExit(format_future_availability_error(availability))
     run_label = f"{slugify(label)}_{args.checkpoint}_{input_mode}_{months_info['end_month'].strftime('%Y_%m')}_{run_suffix}"
     run_dir = resolve_forecast_output_dir(project_output_dir, run_label)
     batch_dir = run_dir / "batches"
@@ -381,6 +396,7 @@ def save_native_one_step_artifacts(
             str(context.months_info["input_last"].date()),
         ],
         "forecast_month": str(result.forecast_month.date()),
+        "data_availability": context.months_info.get("availability_report"),
         "raw_batch_input": str(result.saved_windows["input_window"]),
         "raw_batch_target": str(result.saved_windows["target_window"]) if "target_window" in result.saved_windows else None,
         "native_prediction_original": str(predicted_path),
@@ -429,6 +445,7 @@ def save_native_rollout_artifacts(
             str(context.months_info["input_last"].date()),
         ],
         "forecast_months": [str(month.date()) for month in result.forecast_months],
+        "data_availability": context.months_info.get("availability_report"),
         "raw_batch_input": str(result.saved_windows["input_window"]),
         "raw_batch_target": str(result.saved_windows["target_window"]) if "target_window" in result.saved_windows else None,
         "native_rollout_batches": [str(path) for path in batch_paths],

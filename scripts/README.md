@@ -17,6 +17,7 @@ Questo ramo contiene solo gli script che servono ancora alla direzione `BioAnaly
 - [selected_area_indicators.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/selected_area_indicators.py)
 - [inventory_biocube.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/inventory_biocube.py)
 - [view_minimum_sources.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/view_minimum_sources.py)
+- [audit_future_dataset_coverage.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/audit_future_dataset_coverage.py)
 
 ### Native forecast
 
@@ -40,14 +41,18 @@ Oggi i gruppi alimentati da dati reali nel batch nativo sono:
 - `climate`
 - `species`
 - `land` da `lsm`
+- `vegetation` da `NDVI` CSV oppure proxy `LAI`
+- `agriculture` da CSV europeo
+- `forest` da CSV europeo
 
 Restano ancora placeholder:
 
-- `vegetation`
-- `agriculture`
-- `forest`
 - `redlist`
 - `misc`
+
+### Estensione dati futuri
+
+- [extend_era5_to_2026.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/extend_era5_to_2026.py)
 
 ## Cosa E Stato Rimosso Di Proposito
 
@@ -67,6 +72,9 @@ Il motivo e semplice:
 ```bash
 source scripts/activate_bioanalyst_model.sh
 python scripts/check_project_setup.py
+python scripts/extend_era5_to_2026.py --years 2021 --dry-run
+python scripts/extend_era5_to_2026.py --years 2021 2022 2023 2024 --target all_monthly
+python scripts/audit_future_dataset_coverage.py --input-mode all --forecast-start 2020-07-01 --forecast-end 2021-12-01
 python scripts/forecast_native_one_step.py --city milano --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu
 python scripts/forecast_native_rollout.py --city milano --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu --steps 6
 python scripts/inspect_native_outputs.py --run-dir outputs/local_preview/model_forecast/milan_2019_12_native_one_step
