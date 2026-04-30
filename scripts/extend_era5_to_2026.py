@@ -175,13 +175,22 @@ VARIABLE_RENAME_MAP: dict[str, dict[str, str]] = {
     },
     "climate_a_hourly": {
         "snowmelt": "smlt",
+        "smlt": "smlt",
         "total_precipitation": "tp",
+        "tp": "tp",
         "convective_snowfall": "csfr",
+        "csf": "csfr",
+        "csfr": "csfr",
         "surface_solar_radiation_downwards": "avg_sdswrf",
-        "surface_net_shortwave_radiation_flux": "avg_snswrf",
-        "surface_net_longwave_radiation_flux": "avg_snlwrf",
+        "ssrd": "avg_sdswrf",
+        "surface_net_solar_radiation": "avg_snswrf",
+        "ssr": "avg_snswrf",
+        "surface_net_thermal_radiation": "avg_snlwrf",
+        "str": "avg_snlwrf",
         "mean_total_precipitation_rate": "avg_tprate",
+        "mtpr": "avg_tprate",
         "surface_solar_radiation_downwards_clear_sky": "avg_sdswrfcs",
+        "ssrdc": "avg_sdswrfcs",
     },
 }
 
@@ -286,16 +295,17 @@ def aggregate_hourly_to_monthly(hourly_path: Path, target_name: str) -> xr.Datas
     with xr.open_dataset(hourly_path, engine="netcdf4") as ds:
         ds = rename_and_clean(ds, target_name)
         time_values = pd.to_datetime(ds["valid_time"].values)
-        monthly_groups = pd.Series(time_values).dt.to_period("M")
+        month_starts = pd.Series(time_values).dt.to_period("M").dt.to_timestamp()
         monthly_parts: list[xr.Dataset] = []
-        for period, group in ds.groupby(monthly_groups):
+        for month_time in pd.Index(month_starts).drop_duplicates().sort_values():
+            positions = np.where(month_starts == month_time)[0]
+            group = ds.isel(valid_time=positions)
             agg: dict[str, xr.DataArray] = {}
             for var in group.data_vars:
                 if var in {"tp", "csfr", "smlt"}:
                     agg[var] = group[var].sum(dim="valid_time", keep_attrs=True)
                 else:
                     agg[var] = group[var].mean(dim="valid_time", keep_attrs=True)
-            month_time = pd.Timestamp(period.year, period.month, 1)
             month_ds = xr.Dataset(
                 agg,
                 coords={
