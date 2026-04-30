@@ -503,6 +503,36 @@ def summary_frame(feasibility: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def timestamped_fallback(path: Path) -> Path:
+    stamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+    return path.with_name(f"{path.stem}_{stamp}{path.suffix}")
+
+
+def write_excel_with_fallback(path: Path, sheets: dict[str, pd.DataFrame]) -> Path:
+    target = path
+    try:
+        with pd.ExcelWriter(target) as writer:
+            for sheet_name, frame in sheets.items():
+                frame.to_excel(writer, sheet_name=sheet_name, index=False)
+        return target
+    except PermissionError:
+        fallback = timestamped_fallback(path)
+        with pd.ExcelWriter(fallback) as writer:
+            for sheet_name, frame in sheets.items():
+                frame.to_excel(writer, sheet_name=sheet_name, index=False)
+        return fallback
+
+
+def write_csv_with_fallback(path: Path, frame: pd.DataFrame) -> Path:
+    try:
+        frame.to_csv(path, index=False, encoding="utf-8-sig", sep=";", decimal=",")
+        return path
+    except PermissionError:
+        fallback = timestamped_fallback(path)
+        frame.to_csv(fallback, index=False, encoding="utf-8-sig", sep=";", decimal=",")
+        return fallback
+
+
 def main() -> None:
     args = build_parser().parse_args()
     biocube_dir = resolve_biocube_dir(args.biocube_dir)
@@ -515,17 +545,21 @@ def main() -> None:
     summary = summary_frame(feasibility)
 
     workbook_path = output_dir / f"biocube_future_coverage_{args.forecast_start[:4]}_{args.forecast_end[:4]}.xlsx"
-    with pd.ExcelWriter(workbook_path) as writer:
-        summary.to_excel(writer, sheet_name="summary", index=False)
-        inventory.to_excel(writer, sheet_name="sources", index=False)
-        feasibility.to_excel(writer, sheet_name="forecast_feasibility", index=False)
+    workbook_path = write_excel_with_fallback(
+        workbook_path,
+        {
+            "summary": summary,
+            "sources": inventory,
+            "forecast_feasibility": feasibility,
+        },
+    )
 
     inventory_csv = output_dir / "biocube_source_inventory.csv"
     feasibility_csv = output_dir / "biocube_forecast_feasibility.csv"
     summary_csv = output_dir / "biocube_future_coverage_summary.csv"
-    inventory.to_csv(inventory_csv, index=False, encoding="utf-8-sig", sep=";", decimal=",")
-    feasibility.to_csv(feasibility_csv, index=False, encoding="utf-8-sig", sep=";", decimal=",")
-    summary.to_csv(summary_csv, index=False, encoding="utf-8-sig", sep=";", decimal=",")
+    inventory_csv = write_csv_with_fallback(inventory_csv, inventory)
+    feasibility_csv = write_csv_with_fallback(feasibility_csv, feasibility)
+    summary_csv = write_csv_with_fallback(summary_csv, summary)
 
     result = {
         "biocube_dir": str(biocube_dir),
