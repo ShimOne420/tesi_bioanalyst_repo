@@ -97,6 +97,7 @@ ERA5_DOWNLOAD_CONFIG: dict[str, dict[str, Any]] = {
         "request": {
             "product_type": ["monthly_averaged_reanalysis"],
             "variable": [
+                "2m_temperature",
                 "2m_dewpoint_temperature",
                 "snow_depth",
             ],
@@ -115,8 +116,8 @@ CLIMATE_A_HOURLY_CONFIG: dict[str, Any] = {
             "total_precipitation",
             "convective_snowfall",
             "surface_solar_radiation_downwards",
-            "surface_net_shortwave_radiation_flux",
-            "surface_net_longwave_radiation_flux",
+            "surface_net_solar_radiation",
+            "surface_net_thermal_radiation",
             "mean_total_precipitation_rate",
             "surface_solar_radiation_downwards_clear_sky",
         ],
@@ -151,6 +152,7 @@ VARIABLE_RENAME_MAP: dict[str, dict[str, str]] = {
         "specific_humidity": "q",
     },
     "climate_b": {
+        "2m_temperature": "t2m",
         "2m_dewpoint_temperature": "d2m",
         "snow_depth": "sd",
     },
@@ -295,7 +297,9 @@ def merge_with_existing(existing_path: Path, new_ds: xr.Dataset, target_name: st
     merged = merged_time
     for var in extra_vars:
         merged[var] = new_ds[var]
-    existing_extra = set(existing.data_vars) - common - set(existing.data_vars)
+    existing_extra = set(existing.data_vars) - common
+    for var in existing_extra:
+        merged[var] = existing[var]
     for attr in existing.attrs:
         if attr not in merged.attrs:
             merged.attrs[attr] = existing.attrs[attr]
