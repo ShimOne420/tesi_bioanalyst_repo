@@ -205,6 +205,35 @@ def month_number_from_value(value: Any) -> int:
     raise ValueError(f"Impossibile interpretare il mese NDVI: {value}")
 
 
+def find_ndvi_value_column(columns: list[str]) -> str:
+    ignored = {
+        "country",
+        "latitude",
+        "longitude",
+        "lat",
+        "lon",
+        "year",
+        "month",
+        "date",
+        "timestamp",
+        "valid_time",
+        "variable",
+    }
+    for candidate in ("NDVI", "ndvi", "value", "Value", "mean", "Mean", "mean_value"):
+        if candidate in columns:
+            return candidate
+    for column in columns:
+        if str(column).casefold() not in ignored:
+            return str(column)
+    raise KeyError(f"Nessuna colonna valore NDVI trovata. Colonne: {columns[:20]}")
+
+
+def numeric_series_has_signal(values: pd.Series, *, eps: float = 1e-8) -> bool:
+    numeric = pd.to_numeric(values, errors="coerce")
+    finite = numeric[np.isfinite(numeric)]
+    return bool((finite.abs() > eps).any())
+
+
 def scan_netcdf_month_coverage(path: Path) -> dict[str, Any]:
     with xr.open_dataset(path, engine="netcdf4") as ds:
         if "valid_time" not in ds.coords:
@@ -266,18 +295,23 @@ def scan_ndvi_month_coverage(path: Path) -> dict[str, Any]:
     )
     year_column = next((name for name in ("Year", "year", "YEAR", "Anno", "anno") if name in ndvi_frame.columns), None)
     month_column = next((name for name in ("Month", "month", "MONTH", "Mese", "mese") if name in ndvi_frame.columns), None)
+    value_column = find_ndvi_value_column(ndvi_frame.columns.tolist())
 
     month_set: set[pd.Timestamp] = set()
     if year_column and month_column:
-        years = pd.to_numeric(ndvi_frame[year_column], errors="coerce")
-        month_numbers = ndvi_frame[month_column].map(month_number_from_value)
-        for year_value, month_value in zip(years, month_numbers):
-            if pd.isna(year_value):
-                continue
-            month_set.add(pd.Timestamp(year=int(year_value), month=int(month_value), day=1))
+        dated_frame = ndvi_frame.copy()
+        dated_frame["_year"] = pd.to_numeric(dated_frame[year_column], errors="coerce")
+        dated_frame["_month_number"] = dated_frame[month_column].map(month_number_from_value)
+        grouped = dated_frame.dropna(subset=["_year", "_month_number"]).groupby(["_year", "_month_number"])
+        for (year_value, month_value), month_frame in grouped:
+            if numeric_series_has_signal(month_frame[value_column]):
+                month_set.add(pd.Timestamp(year=int(year_value), month=int(month_value), day=1))
     elif date_column:
-        months = pd.to_datetime(ndvi_frame[date_column], errors="coerce").dropna().dt.to_period("M").dt.to_timestamp()
-        month_set = {to_month_start(month) for month in months.tolist()}
+        dated_frame = ndvi_frame.copy()
+        dated_frame["_month"] = pd.to_datetime(dated_frame[date_column], errors="coerce").dt.to_period("M").dt.to_timestamp()
+        for month, month_frame in dated_frame.dropna(subset=["_month"]).groupby("_month"):
+            if numeric_series_has_signal(month_frame[value_column]):
+                month_set.add(to_month_start(month))
     else:
         columns = ndvi_frame.columns.tolist()
         month_pattern = re.compile(r"(20\d{2})[-_]?([01]?\d)")
@@ -286,7 +320,7 @@ def scan_ndvi_month_coverage(path: Path) -> dict[str, Any]:
             if match is None:
                 continue
             month_int = int(match.group(2))
-            if 1 <= month_int <= 12:
+            if 1 <= month_int <= 12 and numeric_series_has_signal(ndvi_frame[str(name)]):
                 month_set.add(pd.Timestamp(year=int(match.group(1)), month=month_int, day=1))
 
     return {

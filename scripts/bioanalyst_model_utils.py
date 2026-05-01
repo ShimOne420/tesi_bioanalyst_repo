@@ -442,18 +442,25 @@ def scan_ndvi_month_coverage(path: Path) -> dict[str, Any]:
     )
     year_column = next((name for name in ("Year", "year", "YEAR", "Anno", "anno") if name in ndvi_frame.columns), None)
     month_column = next((name for name in ("Month", "month", "MONTH", "Mese", "mese") if name in ndvi_frame.columns), None)
+    ndvi_column = next((name for name in ("NDVI", "ndvi") if name in ndvi_frame.columns), None)
 
     month_set: set[pd.Timestamp] = set()
     if year_column and month_column:
-        years = pd.to_numeric(ndvi_frame[year_column], errors="coerce")
-        month_numbers = ndvi_frame[month_column].map(month_number_from_value)
-        for year_value, month_value in zip(years, month_numbers, strict=False):
-            if pd.isna(year_value):
-                continue
-            month_set.add(pd.Timestamp(year=int(year_value), month=int(month_value), day=1))
+        value_column = ndvi_column or find_value_column(ndvi_frame.columns.tolist(), "NDVI")
+        dated_frame = ndvi_frame.copy()
+        dated_frame["_year"] = pd.to_numeric(dated_frame[year_column], errors="coerce")
+        dated_frame["_month_number"] = dated_frame[month_column].map(month_number_from_value)
+        grouped = dated_frame.dropna(subset=["_year", "_month_number"]).groupby(["_year", "_month_number"])
+        for (year_value, month_value), month_frame in grouped:
+            if numeric_series_has_signal(month_frame[value_column]):
+                month_set.add(pd.Timestamp(year=int(year_value), month=int(month_value), day=1))
     elif date_column:
-        months = pd.to_datetime(ndvi_frame[date_column], errors="coerce").dropna().dt.to_period("M").dt.to_timestamp()
-        month_set = {to_month_start(month) for month in months.tolist()}
+        value_column = ndvi_column or find_value_column(ndvi_frame.columns.tolist(), "NDVI")
+        dated_frame = ndvi_frame.copy()
+        dated_frame["_month"] = pd.to_datetime(dated_frame[date_column], errors="coerce").dt.to_period("M").dt.to_timestamp()
+        for month, month_frame in dated_frame.dropna(subset=["_month"]).groupby("_month"):
+            if numeric_series_has_signal(month_frame[value_column]):
+                month_set.add(to_month_start(month))
     else:
         columns = ndvi_frame.columns.tolist()
         month_pattern = re.compile(r"(20\d{2})[-_]?([01]?\d)")
@@ -462,7 +469,7 @@ def scan_ndvi_month_coverage(path: Path) -> dict[str, Any]:
             if match is None:
                 continue
             month_int = int(match.group(2))
-            if 1 <= month_int <= 12:
+            if 1 <= month_int <= 12 and numeric_series_has_signal(ndvi_frame[str(name)]):
                 month_set.add(pd.Timestamp(year=int(match.group(1)), month=month_int, day=1))
 
     return {
@@ -471,7 +478,6 @@ def scan_ndvi_month_coverage(path: Path) -> dict[str, Any]:
         "min_month": min(month_set) if month_set else None,
         "max_month": max(month_set) if month_set else None,
     }
-
 
 def scan_source_time_coverage(source_key: str, path: Path) -> dict[str, Any]:
     if source_key in {"surface", "edaphic", "atmos", "climate_a", "climate_b", "land_vegetation_dynamic"}:
@@ -724,6 +730,12 @@ def build_zero_group(var_names: list[str], months: list[pd.Timestamp]) -> dict[s
     }
 
 
+def tensor_has_signal(tensor: torch.Tensor, *, eps: float = 1e-8) -> bool:
+    values = tensor.detach().cpu()
+    finite = values[torch.isfinite(values)]
+    return bool(finite.numel() and torch.any(torch.abs(finite) > eps).item())
+
+
 def prepare_yearly_grid_frame(frame: pd.DataFrame, source_name: str) -> pd.DataFrame:
     """Porta CSV annuali BioCube sulla griglia 0.25 gradi del modello."""
     required_columns = {"Latitude", "Longitude"}
@@ -912,6 +924,13 @@ def month_number_from_value(value) -> int:
         raise
 
 
+def numeric_series_has_signal(values: pd.Series, *, eps: float = 1e-8) -> bool:
+    """Riconosce mesi NDVI realmente informativi, non solo colonne/righe presenti."""
+    numeric = pd.to_numeric(values, errors="coerce")
+    finite = numeric[np.isfinite(numeric)]
+    return bool((finite.abs() > eps).any())
+
+
 def build_vegetation_group_from_ndvi_csv(
     ndvi_path: Path,
     months: list[pd.Timestamp],
@@ -941,6 +960,8 @@ def build_vegetation_group_from_ndvi_csv(
             ]
             if month_frame.empty:
                 raise KeyError(f"Nessuna riga NDVI trovata per {to_month_start(month):%Y-%m}")
+            if not numeric_series_has_signal(month_frame[value_column]):
+                raise ValueError(f"NDVI CSV senza segnale numerico per {to_month_start(month):%Y-%m}")
             maps.append(yearly_column_to_grid(month_frame, value_column, latitudes, longitudes))
     elif date_column:
         value_column = ndvi_column or find_value_column(ndvi_frame.columns.tolist(), "NDVI")
@@ -950,6 +971,8 @@ def build_vegetation_group_from_ndvi_csv(
             month_frame = dated_frame[dated_frame["_month"] == to_month_start(month)]
             if month_frame.empty:
                 raise KeyError(f"Nessuna riga NDVI trovata per {to_month_start(month):%Y-%m}")
+            if not numeric_series_has_signal(month_frame[value_column]):
+                raise ValueError(f"NDVI CSV senza segnale numerico per {to_month_start(month):%Y-%m}")
             maps.append(yearly_column_to_grid(month_frame, value_column, latitudes, longitudes))
     else:
         maps = [
@@ -961,7 +984,10 @@ def build_vegetation_group_from_ndvi_csv(
             )
             for month in months
         ]
-    return {"NDVI": torch.stack(maps)}
+    ndvi = torch.stack(maps)
+    if not tensor_has_signal(ndvi):
+        raise ValueError("NDVI CSV rasterizzato senza segnale sulla griglia BioAnalyst")
+    return {"NDVI": ndvi}
 
 
 def build_forest_group(forest_path: Path, months: list[pd.Timestamp], latitudes: np.ndarray, longitudes: np.ndarray) -> dict[str, torch.Tensor]:
@@ -1067,12 +1093,15 @@ def build_vegetation_group_from_sources(
             return build_vegetation_group_from_ndvi_csv(source_paths["land_ndvi_csv"], months, latitudes, longitudes)
         except Exception as exc:
             print(f"  [warn] NDVI CSV non utilizzabile per i mesi richiesti ({exc}); fallback su proxy LAI", flush=True)
-    return build_vegetation_group(
+    vegetation_group = build_vegetation_group(
         require_source_path(source_paths, "land_vegetation_dynamic"),
         months,
         latitudes,
         longitudes,
     )
+    if not tensor_has_signal(vegetation_group["NDVI"]):
+        print("  [warn] Proxy LAI vegetation senza segnale NDVI sulla griglia selezionata", flush=True)
+    return vegetation_group
 
 
 def build_land_group_from_surface(surface_group: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
