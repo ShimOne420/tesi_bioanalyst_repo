@@ -324,6 +324,30 @@ def months_missing_from_coverage(coverage: dict[str, Any], months: list[pd.Times
     return [month for month in months if to_month_start(month) not in available_months]
 
 
+def resolve_vegetation_source_key(
+    source_paths: dict[str, Path],
+    months: list[pd.Timestamp] | None = None,
+) -> str | None:
+    ndvi_path = source_paths.get("land_ndvi_csv")
+    if ndvi_path is not None and ndvi_path.exists():
+        if months is None:
+            return "land_ndvi_csv"
+        try:
+            coverage = scan_source_time_coverage("land_ndvi_csv", ndvi_path)
+            if not months_missing_from_coverage(coverage, months):
+                return "land_ndvi_csv"
+        except Exception:
+            pass
+
+    dynamic_path = source_paths.get("land_vegetation_dynamic")
+    if dynamic_path is not None and dynamic_path.exists():
+        return "land_vegetation_dynamic"
+
+    if ndvi_path is not None and ndvi_path.exists():
+        return "land_ndvi_csv"
+    return None
+
+
 def required_future_source_checks(source_paths: dict[str, Path], input_mode: str = "all") -> list[dict[str, Any]]:
     input_mode = normalize_input_mode(input_mode)
     checks = [
@@ -334,7 +358,7 @@ def required_future_source_checks(source_paths: dict[str, Path], input_mode: str
         {"label": "climate_b", "source_key": "climate_b", "required": True},
     ]
     if input_mode == "all":
-        vegetation_key = "land_ndvi_csv" if "land_ndvi_csv" in source_paths else "land_vegetation_dynamic"
+        vegetation_key = resolve_vegetation_source_key(source_paths)
         checks.extend(
             [
                 {"label": "vegetation", "source_key": vegetation_key, "required": True},
@@ -353,9 +377,20 @@ def assess_future_inference_availability(
     forecast_month: pd.Timestamp,
     input_mode: str = "all",
 ) -> dict[str, Any]:
-    checks = required_future_source_checks(source_paths, input_mode=input_mode)
     input_months = [to_month_start(input_prev), to_month_start(input_last)]
     compare_months = [to_month_start(input_last), to_month_start(forecast_month)]
+    requested_months = sorted({*input_months, *compare_months})
+    checks = required_future_source_checks(source_paths, input_mode=input_mode)
+    if input_mode == "all":
+        vegetation_key = resolve_vegetation_source_key(source_paths, requested_months)
+        checks = [
+            (
+                {"label": "vegetation", "source_key": vegetation_key, "required": True}
+                if check["label"] == "vegetation"
+                else check
+            )
+            for check in checks
+        ]
     source_reports = []
     missing_input: list[str] = []
     missing_compare: list[str] = []
