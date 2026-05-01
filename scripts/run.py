@@ -469,9 +469,7 @@ def build_cell_frame(
             valid_observation = True
             if valid_observation_mask is not None:
                 valid_observation = bool(valid_observation_mask[lat_index, lon_index])
-            observed_value = None
-            if observed_map is not None and valid_observation:
-                observed_value = float(observed_map[lat_index, lon_index])
+            observed_value = None if observed_map is None else float(observed_map[lat_index, lon_index])
             difference = None if observed_value is None else predicted_value - observed_value
             rows.append(
                 {
@@ -635,6 +633,7 @@ def build_valid_observation_mask(
         return None
     valid_mask = np.isfinite(observed_map)
     if observed_batch is not None and group == "vegetation" and variable == "NDVI":
+        valid_mask &= np.abs(observed_map) > 1e-8
         try:
             land_map, _ = get_batch_variable_map(observed_batch, group_name="land", variable_name="Land")
             valid_mask &= np.isfinite(land_map) & (land_map > 0.5)
