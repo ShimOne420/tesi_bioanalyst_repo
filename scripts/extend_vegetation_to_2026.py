@@ -11,7 +11,7 @@ Requisiti:
     ~/.cdsapirc configurato con URL e API key CDS
 
 Uso:
-    python scripts/extend_vegetation_to_2026.py --years 2022 2023 2024 2025 2026
+    python scripts/extend_vegetation_to_2026.py --years 2021 2022 2023 2024 2025 2026
     python scripts/extend_vegetation_to_2026.py --years 2022 --months 1 2 --dry-run
 """
 
@@ -207,7 +207,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Estende ERA5-Land vegetation LAI fino al 2026 e aggiorna data_stream-moda.nc.",
     )
-    parser.add_argument("--years", type=int, nargs="+", default=[2022, 2023, 2024, 2025, 2026])
+    parser.add_argument("--years", type=int, nargs="+", default=[2021, 2022, 2023, 2024, 2025, 2026])
     parser.add_argument("--months", type=int, nargs="+", default=list(range(1, 13)), help="Mesi da scaricare, 1-12.")
     parser.add_argument("--biocube-dir", type=Path, default=None, help="Override di BIOCUBE_DIR.")
     parser.add_argument("--tmp-dir", type=Path, default=None, help="Cartella temporanea per i download.")
@@ -275,7 +275,7 @@ def main() -> None:
     print("Verifica con:")
     print(
         "  python scripts/audit_future_dataset_coverage.py "
-        "--input-mode all --forecast-start 2022-01-01 --forecast-end 2026-12-01"
+        "--input-mode all --forecast-start 2021-01-01 --forecast-end 2026-12-01"
     )
 
 
