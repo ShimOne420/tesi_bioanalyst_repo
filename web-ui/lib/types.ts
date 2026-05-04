@@ -19,6 +19,10 @@ export type IndicatorRow = {
   month: string;
   temperature_mean_area_c: number | null;
   precipitation_mean_area_mm: number | null;
+  ndvi_mean_area: number | null;
+  soil_water_surface_mean_area: number | null;
+  soil_water_deep_mean_area: number | null;
+  cropland_mean_area: number | null;
   cell_count_land: number | null;
   cells_with_species_records: number | null;
   species_count_observed_area: number | null;

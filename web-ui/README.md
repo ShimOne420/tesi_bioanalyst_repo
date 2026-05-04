@@ -11,7 +11,7 @@ L'app permette di:
 - definire un periodo mensile
 - disegnare manualmente un rettangolo sulla mappa d'Europa
 - inviare la selezione a un backend
-- visualizzare in output i tre indicatori minimi per mese
+- visualizzare in output gli indicatori osservativi BIOMAP per mese
 - scaricare l'output mensile in `CSV`, `CSV per Excel` o `XLSX`
 
 ## Architettura
@@ -74,6 +74,7 @@ Quando backend e frontend sono entrambi aggiornati:
   - `Scarica CSV`
   - `Scarica CSV per Excel`
   - `Scarica XLSX`
+- la tabella include temperatura, precipitazioni, NDVI, `swvl1`, `swvl2`, Cropland e specie osservate
 
 ## Se vedi ancora solo il 2000
 

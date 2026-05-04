@@ -34,6 +34,10 @@ export function createDemoResponse(input: {
       month,
       temperature_mean_area_c: Number((12 + seasonal * 11 + (50 - latCenter) * 0.18).toFixed(2)),
       precipitation_mean_area_mm: Number((48 + rainSeasonal * 22 + Math.abs(lonCenter) * 0.3).toFixed(2)),
+      ndvi_mean_area: Number((0.48 + seasonal * 0.18).toFixed(3)),
+      soil_water_surface_mean_area: Number((0.25 + rainSeasonal * 0.06).toFixed(3)),
+      soil_water_deep_mean_area: Number((0.31 + rainSeasonal * 0.04).toFixed(3)),
+      cropland_mean_area: Number((34 + Math.max(0, 46 - latCenter) * 1.2).toFixed(2)),
       cell_count_land: Math.round(areaFactor),
       cells_with_species_records: Math.max(0, Math.round(areaFactor * 0.2 + seasonal * 3)),
       species_count_observed_area: Math.max(0, Math.round(areaFactor * 0.4 + seasonal * 4 + 3))
@@ -50,7 +54,7 @@ export function createDemoResponse(input: {
     end: `${input.endMonth}-01`,
     monthly,
     notes: [
-      "Modalita demo attiva: questa anteprima mostra l'interfaccia ma non usa ancora il dataset reale.",
+      "Modalita demo attiva: questa anteprima mostra il contratto multi-variabile ma non usa ancora il dataset reale.",
       "Per dati reali in locale puoi attivare il bridge verso lo script Python; per Vercel serve un backend dati dedicato."
     ]
   };

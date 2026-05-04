@@ -1,4 +1,4 @@
-"""Funzioni di supporto condivise per gli script degli indicatori minimi.
+"""Funzioni di supporto condivise per gli script degli indicatori osservativi.
 
 Questo file non va lanciato da solo. Serve come modulo comune per:
 
