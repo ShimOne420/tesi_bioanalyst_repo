@@ -106,7 +106,7 @@ NATIVE_GROUP_FIELDS = {
 
 DISPLAY_UNIT_RULES = {
     "t2m": ("°C", lambda values: values - 273.15),
-    "tp": ("mm", lambda values: values * 1000.0),
+    "tp": ("mm/day", lambda values: values * 1000.0),
 }
 
 

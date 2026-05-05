@@ -300,10 +300,20 @@ def aggregate_hourly_to_monthly(hourly_path: Path, target_name: str) -> xr.Datas
         for month_time in pd.Index(month_starts).drop_duplicates().sort_values():
             positions = np.where(month_starts == month_time)[0]
             group = ds.isel(valid_time=positions)
+            days_in_month = pd.Timestamp(month_time).days_in_month
             agg: dict[str, xr.DataArray] = {}
             for var in group.data_vars:
                 if var in {"tp", "csfr", "smlt"}:
-                    agg[var] = group[var].sum(dim="valid_time", keep_attrs=True)
+                    # BioCube storico usa monthly means of daily means per gli accumuli
+                    # idrologici: sommiamo l'accumulo orario del mese e poi normalizziamo
+                    # per il numero di giorni, ottenendo m/day invece di m/month.
+                    daily_mean_accumulation = group[var].sum(dim="valid_time", keep_attrs=True) / float(days_in_month)
+                    daily_mean_accumulation.attrs = dict(group[var].attrs)
+                    daily_mean_accumulation.attrs["units"] = "m day-1"
+                    daily_mean_accumulation.attrs["aggregation_note"] = (
+                        "monthly mean of daily accumulations reconstructed from hourly ERA5"
+                    )
+                    agg[var] = daily_mean_accumulation
                 else:
                     agg[var] = group[var].mean(dim="valid_time", keep_attrs=True)
             month_ds = xr.Dataset(
