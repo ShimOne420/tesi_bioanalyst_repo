@@ -180,12 +180,56 @@ def require_source_path(source_paths: dict[str, Path], key: str) -> Path:
     )
 
 
+def resolve_ndvi_source_path(biocube_dir: Path, default_path: Path) -> Path | None:
+    """Trova la tabella NDVI reale anche quando il BioCube usa estensione/nome diverso."""
+    candidates: list[Path] = []
+    for env_name in ("BIOCUBE_NDVI_PATH", "LAND_NDVI_PATH", "NDVI_CSV_PATH"):
+        env_value = os.getenv(env_name)
+        if env_value:
+            candidates.append(Path(env_value).expanduser())
+
+    land_dir = biocube_dir / "Land"
+    candidates.extend(
+        [
+            default_path,
+            default_path.with_suffix(".xlsx"),
+            default_path.with_suffix(".xls"),
+            land_dir / "Europe_ndvi_monthly_un_025.csv",
+            land_dir / "Europe_ndvi_monthly_un_025.xlsx",
+            land_dir / "Europe_ndvi_monthly_un_025.xls",
+        ]
+    )
+    if land_dir.exists():
+        for pattern in ("Europe*ndvi*", "*ndvi_monthly*"):
+            candidates.extend(
+                candidate
+                for candidate in sorted(land_dir.glob(pattern))
+                if candidate.suffix.casefold() in {".csv", ".xlsx", ".xls"}
+            )
+
+    seen = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
 # Verifichiamo un path di ambiente e lo trasformiamo in Path.
 def require_path(env_name: str, create: bool = False) -> Path:
     value = os.getenv(env_name)
     if not value:
         raise RuntimeError(f"Variabile d'ambiente mancante: {env_name}")
     path = Path(value).expanduser()
+    if not path.exists():
+        for normalization in ("NFC", "NFD"):
+            normalized_path = Path(unicodedata.normalize(normalization, str(path))).expanduser()
+            if normalized_path.exists():
+                path = normalized_path
+                break
     if create:
         path.mkdir(parents=True, exist_ok=True)
     elif not path.exists():
@@ -380,6 +424,13 @@ def resolve_source_paths(biocube_dir: Path) -> dict[str, Path]:
     resolved = {}
     for key, (relative_path, _) in MODEL_SOURCE_FILES.items():
         path = biocube_dir / relative_path
+        if key == "land_ndvi_csv":
+            ndvi_path = resolve_ndvi_source_path(biocube_dir, path)
+            if ndvi_path is not None:
+                resolved[key] = ndvi_path
+                if ndvi_path != path:
+                    print(f"  [info] Uso sorgente NDVI alternativa: {ndvi_path}", flush=True)
+                continue
         if not path.exists():
             if key in OPTIONAL_MODEL_SOURCE_KEYS:
                 continue
@@ -481,12 +532,27 @@ def build_zero_group(var_names: list[str], months: list[pd.Timestamp]) -> dict[s
 
 def prepare_yearly_grid_frame(frame: pd.DataFrame, source_name: str) -> pd.DataFrame:
     """Porta CSV annuali BioCube sulla griglia 0.25 gradi del modello."""
+    frame = frame.copy()
+    frame.columns = [str(column).strip() for column in frame.columns]
+    rename_map = {}
+    column_lookup = {column.casefold(): column for column in frame.columns}
+    if "Latitude" not in frame.columns:
+        lat_column = column_lookup.get("latitude") or column_lookup.get("lat")
+        if lat_column:
+            rename_map[lat_column] = "Latitude"
+    if "Longitude" not in frame.columns:
+        lon_column = column_lookup.get("longitude") or column_lookup.get("lon")
+        if lon_column:
+            rename_map[lon_column] = "Longitude"
+    if rename_map:
+        frame = frame.rename(columns=rename_map)
+
     required_columns = {"Latitude", "Longitude"}
     missing_columns = required_columns.difference(frame.columns)
     if missing_columns:
         raise KeyError(f"Colonne mancanti in {source_name}: {sorted(missing_columns)}")
 
-    prepared = frame.copy()
+    prepared = frame
     prepared["Latitude"] = snap_coordinates_to_grid(prepared["Latitude"])
     prepared["Longitude"] = snap_coordinates_to_grid(prepared["Longitude"])
     return prepared[
@@ -702,16 +768,41 @@ def require_ndvi_month_signal(tensor: torch.Tensor, month: pd.Timestamp, source_
     return tensor
 
 
+def load_ndvi_table(ndvi_path: Path) -> pd.DataFrame:
+    """Carica NDVI da CSV o Excel scegliendo un foglio compatibile con griglia/mese."""
+    suffix = ndvi_path.suffix.casefold()
+    if suffix == ".csv":
+        return pd.read_csv(ndvi_path)
+    if suffix in {".xlsx", ".xls"}:
+        workbook = pd.ExcelFile(ndvi_path)
+        for sheet_name in workbook.sheet_names:
+            preview = pd.read_excel(workbook, sheet_name=sheet_name, nrows=0)
+            columns = [str(column).strip() for column in preview.columns]
+            normalized = {column.casefold() for column in columns}
+            has_coordinates = (
+                ("latitude" in normalized or "lat" in normalized)
+                and ("longitude" in normalized or "lon" in normalized)
+            )
+            has_monthly_ndvi = any("ndvi" in column.casefold() and re.search(r"\d{4}", column) for column in columns)
+            if has_coordinates and has_monthly_ndvi:
+                return pd.read_excel(workbook, sheet_name=sheet_name)
+        raise ValueError(
+            f"Nessun foglio Excel NDVI valido trovato in {ndvi_path}. "
+            f"Fogli disponibili: {workbook.sheet_names}"
+        )
+    raise ValueError(f"Formato tabella NDVI non supportato: {ndvi_path.suffix}")
+
+
 def build_vegetation_group_from_ndvi_csv(
     ndvi_path: Path,
     months: list[pd.Timestamp],
     latitudes: np.ndarray,
     longitudes: np.ndarray,
 ) -> dict[str, torch.Tensor]:
-    """Costruisce il canale NDVI dal CSV ufficiale BioCube quando e disponibile."""
-    print(f"  [debug] Leggo NDVI CSV: {ndvi_path}", flush=True)
-    ndvi_frame = prepare_yearly_grid_frame(pd.read_csv(ndvi_path), "ndvi")
-    print(f"  [debug] NDVI CSV caricato: {len(ndvi_frame)} righe, colonne: {list(ndvi_frame.columns)[:10]}", flush=True)
+    """Costruisce il canale NDVI dalla tabella ufficiale BioCube quando e disponibile."""
+    print(f"  [debug] Leggo tabella NDVI: {ndvi_path}", flush=True)
+    ndvi_frame = prepare_yearly_grid_frame(load_ndvi_table(ndvi_path), "ndvi")
+    print(f"  [debug] Tabella NDVI caricata: {len(ndvi_frame)} righe, colonne: {list(ndvi_frame.columns)[:10]}", flush=True)
     date_column = next(
         (name for name in ("Timestamp", "timestamp", "Date", "date", "Month", "month", "valid_time") if name in ndvi_frame.columns),
         None,
@@ -876,21 +967,33 @@ def build_vegetation_group_from_sources(
     months: list[pd.Timestamp],
     latitudes: np.ndarray,
     longitudes: np.ndarray,
+    require_real_ndvi: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Preferisce il CSV NDVI ufficiale BioCube; altrimenti usa la sorgente LAI locale."""
     if "land_ndvi_csv" in source_paths:
         ndvi_csv_path = source_paths["land_ndvi_csv"]
-        print(f"  [debug] Provo a caricare NDVI da CSV: {ndvi_csv_path}", flush=True)
+        print(f"  [debug] Provo a caricare NDVI da tabella: {ndvi_csv_path}", flush=True)
         if not ndvi_csv_path.exists():
-            print(f"  [warn] NDVI CSV non trovato: {ndvi_csv_path}", flush=True)
+            print(f"  [warn] Tabella NDVI non trovata: {ndvi_csv_path}", flush=True)
         else:
-            print(f"  [debug] NDVI CSV esiste: {ndvi_csv_path.stat().st_size} bytes", flush=True)
+            print(f"  [debug] Tabella NDVI esiste: {ndvi_csv_path.stat().st_size} bytes", flush=True)
         try:
             return build_vegetation_group_from_ndvi_csv(ndvi_csv_path, months, latitudes, longitudes)
         except (KeyError, ValueError, OSError, pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
-            print(f"  [warn] NDVI CSV non utilizzabile per i mesi richiesti ({exc}); provo fallback LAI", flush=True)
+            if require_real_ndvi:
+                raise RuntimeError(
+                    "Target observed richiede NDVI reale, ma la tabella NDVI non e' utilizzabile "
+                    f"per i mesi {', '.join(month.strftime('%Y-%m') for month in months)}: {exc}"
+                ) from exc
+            print(f"  [warn] Tabella NDVI non utilizzabile per i mesi richiesti ({exc}); provo fallback LAI", flush=True)
     else:
-        print(f"  [debug] 'land_ndvi_csv' non presente in source_paths. Chiavi: {list(source_paths.keys())}", flush=True)
+        message = (
+            "`land_ndvi_csv` non presente in source_paths. "
+            "Atteso `Land/Europe_ndvi_monthly_un_025.csv` oppure imposta BIOCUBE_NDVI_PATH."
+        )
+        if require_real_ndvi:
+            raise FileNotFoundError(message)
+        print(f"  [debug] {message} Chiavi: {list(source_paths.keys())}", flush=True)
     print(f"  [debug] Uso fallback LAI da NetCDF", flush=True)
     return build_vegetation_group(
         require_source_path(source_paths, "land_vegetation_dynamic"),
@@ -995,6 +1098,7 @@ def build_raw_batch_for_months(
     months: list[pd.Timestamp],
     use_atmospheric_data: bool = True,
     input_mode: str = "all",
+    require_real_ndvi: bool = False,
 ) -> dict:
     input_mode = normalize_input_mode(input_mode)
     print("  - preparo griglia modello", flush=True)
@@ -1035,6 +1139,7 @@ def build_raw_batch_for_months(
             months,
             latitudes,
             longitudes,
+            require_real_ndvi=require_real_ndvi,
         )
     else:
         print("  - input-mode clean: vegetation/agriculture/forest a zero", flush=True)
@@ -1137,6 +1242,7 @@ def save_window_batches(
                 target_months,
                 use_atmospheric_data=use_atmospheric_data,
                 input_mode=target_input_mode,
+                require_real_ndvi=True,
             )
         except Exception as exc:
             raise RuntimeError(
