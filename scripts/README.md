@@ -54,6 +54,7 @@ Restano ancora placeholder:
 
 - [extend_era5_to_2026.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/extend_era5_to_2026.py)
 - [extend_vegetation_to_2026.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/extend_vegetation_to_2026.py)
+- [extend_agriculture_forest_to_2025.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/extend_agriculture_forest_to_2025.py)
 - [extend_future_inputs_to_2026.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/extend_future_inputs_to_2026.py)
 
 ## Cosa E Stato Rimosso Di Proposito
@@ -77,6 +78,7 @@ python scripts/check_project_setup.py
 python scripts/extend_future_inputs_to_2026.py --plan-only
 python scripts/extend_future_inputs_to_2026.py --dry-run
 python scripts/extend_future_inputs_to_2026.py --with-audit
+python scripts/extend_agriculture_forest_to_2025.py --source-root data/staging/agriculture_forest --years 2022 2023 2024 2025 --dry-run
 python scripts/audit_future_dataset_coverage.py --input-mode all --forecast-start 2021-01-01 --forecast-end 2026-12-01
 python scripts/forecast_native_one_step.py --city milano --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu
 python scripts/forecast_native_rollout.py --city milano --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu --steps 6

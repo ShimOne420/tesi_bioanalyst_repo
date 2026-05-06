@@ -184,13 +184,32 @@ def convert_display_values(variable: str, values: np.ndarray) -> tuple[np.ndarra
     return values, "native"
 
 
-def finite_metric_values(predicted: np.ndarray, observed: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def finite_metric_values(
+    predicted: np.ndarray,
+    observed: np.ndarray,
+    valid_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     mask = np.isfinite(predicted) & np.isfinite(observed)
+    if valid_mask is not None:
+        mask &= valid_mask.astype(bool)
     return predicted[mask].astype(np.float64), observed[mask].astype(np.float64)
 
 
-def compute_metrics(predicted: np.ndarray, observed: np.ndarray) -> dict[str, Any]:
-    pred, obs = finite_metric_values(predicted, observed)
+def build_valid_metric_mask(observed_batch, *, group: str, variable: str, observed_map: np.ndarray) -> np.ndarray:
+    valid_mask = np.isfinite(observed_map)
+    if group != "land":
+        try:
+            land_map = selected_maps(get_group(observed_batch, "land")["Land"])[0][1]
+            valid_mask &= np.isfinite(land_map) & (land_map > 0.5)
+        except Exception:
+            pass
+    if group == "vegetation" and str(variable).casefold() == "ndvi":
+        valid_mask &= np.abs(observed_map) > 1e-8
+    return valid_mask
+
+
+def compute_metrics(predicted: np.ndarray, observed: np.ndarray, valid_mask: np.ndarray | None = None) -> dict[str, Any]:
+    pred, obs = finite_metric_values(predicted, observed, valid_mask=valid_mask)
     if pred.size == 0:
         return {
             "cell_count": 0,
@@ -205,6 +224,8 @@ def compute_metrics(predicted: np.ndarray, observed: np.ndarray) -> dict[str, An
             "observed_min": math.nan,
             "observed_max": math.nan,
             "relative_mae_pct": math.nan,
+            "wape_pct": math.nan,
+            "smape_mean_pct": math.nan,
         }
     diff = pred - obs
     corr = math.nan
@@ -212,6 +233,10 @@ def compute_metrics(predicted: np.ndarray, observed: np.ndarray) -> dict[str, An
         corr = float(np.corrcoef(pred, obs)[0, 1])
     observed_abs_mean = float(abs(np.mean(obs)))
     mae = float(np.mean(np.abs(diff)))
+    observed_abs_sum = float(np.sum(np.abs(obs)))
+    smape_denominator = (np.abs(pred) + np.abs(obs)) / 2.0
+    smape_values = np.zeros_like(diff, dtype=np.float64)
+    np.divide(np.abs(diff) * 100.0, smape_denominator, out=smape_values, where=smape_denominator > 1e-12)
     return {
         "cell_count": int(pred.size),
         "predicted_mean": float(np.mean(pred)),
@@ -225,6 +250,8 @@ def compute_metrics(predicted: np.ndarray, observed: np.ndarray) -> dict[str, An
         "observed_min": float(np.min(obs)),
         "observed_max": float(np.max(obs)),
         "relative_mae_pct": math.nan if observed_abs_mean < 1e-12 else float(mae / observed_abs_mean * 100.0),
+        "wape_pct": math.nan if observed_abs_sum < 1e-12 else float(np.sum(np.abs(diff)) / observed_abs_sum * 100.0),
+        "smape_mean_pct": float(np.mean(smape_values)),
     }
 
 
@@ -386,7 +413,8 @@ def variable_metrics_for_run(run_dir: Path, prediction_batch, observed_batch, ma
                 pred_map = align_prediction(pred_map, latitude_flip=lat_flip, longitude_flip=lon_flip)
                 pred_display, unit = convert_display_values(variable, pred_map)
                 obs_display, _ = convert_display_values(variable, obs_map)
-                metrics = compute_metrics(pred_display, obs_display)
+                valid_mask = build_valid_metric_mask(observed_batch, group=group_name, variable=variable, observed_map=obs_map)
+                metrics = compute_metrics(pred_display, obs_display, valid_mask=valid_mask)
                 rows.append(
                     {
                         "run_dir": str(run_dir),

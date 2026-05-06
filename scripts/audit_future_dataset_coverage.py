@@ -96,6 +96,36 @@ OPTIONAL_MODEL_SOURCE_KEYS = {
 }
 
 
+def provenance_sidecar_path(source_path: Path) -> Path:
+    return source_path.with_name(f"{source_path.stem}.provenance.json")
+
+
+def read_source_provenance(source_path: Path) -> dict[str, Any]:
+    sidecar = provenance_sidecar_path(source_path)
+    if not sidecar.exists():
+        return {"path": None, "summary": None, "records": []}
+    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    if isinstance(payload, list):
+        records = payload
+    elif isinstance(payload, dict):
+        records = payload.get("records", [])
+    else:
+        records = []
+    summary_parts = []
+    for record in sorted(records, key=lambda item: int(item.get("year", 0))):
+        year = record.get("year")
+        mode = record.get("mode")
+        source_year = record.get("source_year")
+        if year is None or mode is None:
+            continue
+        summary_parts.append(f"{year}:{mode}<-{source_year}")
+    return {
+        "path": str(sidecar),
+        "summary": " | ".join(summary_parts) if summary_parts else None,
+        "records": records,
+    }
+
+
 def load_project_env() -> None:
     load_dotenv(PROJECT_ROOT / ".env", override=False)
 
@@ -503,6 +533,7 @@ def source_inventory_frame(biocube_dir: Path) -> pd.DataFrame:
         path = biocube_dir / relative_path
         exists = path.exists()
         coverage = scan_source_time_coverage(source_key, path) if exists else {}
+        provenance = read_source_provenance(path) if exists else {"path": None, "summary": None}
         rows.append(
             {
                 "source_key": source_key,
@@ -515,6 +546,8 @@ def source_inventory_frame(biocube_dir: Path) -> pd.DataFrame:
                 "min_month": None if coverage.get("min_month") is None else coverage["min_month"].strftime("%Y-%m"),
                 "max_month": None if coverage.get("max_month") is None else coverage["max_month"].strftime("%Y-%m"),
                 "available_years": ", ".join(str(year) for year in coverage.get("available_years", [])),
+                "provenance_summary": provenance.get("summary"),
+                "provenance_path": provenance.get("path"),
                 "absolute_path": str(path),
             }
         )

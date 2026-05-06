@@ -471,6 +471,10 @@ def build_cell_frame(
                 valid_observation = bool(valid_observation_mask[lat_index, lon_index])
             observed_value = None if observed_map is None else float(observed_map[lat_index, lon_index])
             difference = None if observed_value is None else predicted_value - observed_value
+            smape_pct = None
+            if valid_observation and difference is not None:
+                denominator = (abs(predicted_value) + abs(observed_value)) / 2.0
+                smape_pct = 0.0 if denominator <= 1e-12 else float(abs(difference) / denominator * 100.0)
             rows.append(
                 {
                     "lat": float(lat),
@@ -479,6 +483,7 @@ def build_cell_frame(
                     f"observed_{value_label}": observed_value,
                     f"difference_{value_label}": difference,
                     f"abs_error_{value_label}": None if difference is None else abs(difference),
+                    "smape_pct": smape_pct,
                     "valid_observation": valid_observation,
                     "inside_selected_area": bool(
                         bounds["min_lat"] <= float(lat) <= bounds["max_lat"]
@@ -604,16 +609,31 @@ def compute_summary(frame: pd.DataFrame, value_label: str, scope: str) -> dict[s
         "predicted_max": float(metric_frame[pred_col].max()) if not metric_frame.empty else math.nan,
     }
     if obs_col in metric_frame and metric_frame[obs_col].notna().any():
-        observed_mean = float(metric_frame[obs_col].mean())
-        mae = float(metric_frame[abs_col].mean())
-        rmse = float(math.sqrt(float((metric_frame[diff_col] ** 2).mean())))
-        bias = float(metric_frame[diff_col].mean())
+        observed_metric_frame = metric_frame[metric_frame[obs_col].notna()].copy()
+        observed_values = observed_metric_frame[obs_col].to_numpy(dtype=np.float64)
+        predicted_values = observed_metric_frame[pred_col].to_numpy(dtype=np.float64)
+        diff_values = observed_metric_frame[diff_col].to_numpy(dtype=np.float64)
+        abs_values = observed_metric_frame[abs_col].to_numpy(dtype=np.float64)
+        observed_mean = float(np.mean(observed_values))
+        mae = float(np.mean(abs_values))
+        rmse = float(math.sqrt(float(np.mean(np.square(diff_values)))))
+        bias = float(np.mean(diff_values))
+        corr = math.nan
+        if observed_values.size > 1 and float(np.std(predicted_values)) > 0.0 and float(np.std(observed_values)) > 0.0:
+            corr = float(np.corrcoef(predicted_values, observed_values)[0, 1])
+        smape_mean = math.nan
+        if "smape_pct" in observed_metric_frame.columns and observed_metric_frame["smape_pct"].notna().any():
+            smape_mean = float(observed_metric_frame["smape_pct"].mean())
+        observed_abs_sum = float(np.sum(np.abs(observed_values)))
         summary.update(
             {
                 "observed_mean": observed_mean,
                 "mae": mae,
                 "rmse": rmse,
                 "bias": bias,
+                "correlation": corr,
+                "wape_pct": math.nan if observed_abs_sum <= 1e-12 else float(np.sum(abs_values) / observed_abs_sum * 100.0),
+                "smape_mean_pct": smape_mean,
                 "error_pct_on_abs_observed_mean": None
                 if abs(observed_mean) < 1e-12
                 else float(mae / abs(observed_mean) * 100.0),
@@ -632,13 +652,14 @@ def build_valid_observation_mask(
     if observed_map is None:
         return None
     valid_mask = np.isfinite(observed_map)
-    if observed_batch is not None and group == "vegetation" and variable == "NDVI":
-        valid_mask &= np.abs(observed_map) > 1e-8
+    if observed_batch is not None and group != "land":
         try:
             land_map, _ = get_batch_variable_map(observed_batch, group_name="land", variable_name="Land")
             valid_mask &= np.isfinite(land_map) & (land_map > 0.5)
         except SystemExit:
             pass
+    if group == "vegetation" and variable == "NDVI":
+        valid_mask &= np.abs(observed_map) > 1e-8
     return valid_mask
 
 
