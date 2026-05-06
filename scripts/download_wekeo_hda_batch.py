@@ -31,6 +31,12 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+try:
+    from hda import Client, Configuration
+except ImportError:  # pragma: no cover - optional official client
+    Client = None
+    Configuration = None
+
 
 BASE_URL = "https://gateway.prod.wekeo2.eu/hda-broker"
 TOKEN_URL = f"{BASE_URL}/gettoken"
@@ -193,7 +199,7 @@ def download_file(
     request = Request(
         DOWNLOAD_FETCH_URL.format(download_id=download_id),
         headers={
-            "accept": "application/json",
+            "accept": "*/*",
             "Authorization": f"Bearer {token}",
         },
         method="GET",
@@ -206,12 +212,17 @@ def download_file(
                 or f"{download_id}{extension_from_headers(response.headers) or ''}"
             )
             target_path = destination_dir / sanitize_filename(filename)
+            body = response.read()
+            try:
+                decoded_json = json.loads(body.decode("utf-8"))
+            except Exception:
+                decoded_json = None
+            if isinstance(decoded_json, dict):
+                raise RuntimeError(
+                    f"Download endpoint returned JSON instead of file bytes for {download_id}: {decoded_json}"
+                )
             with target_path.open("wb") as handle:
-                while True:
-                    chunk = response.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    handle.write(chunk)
+                handle.write(body)
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(
@@ -363,6 +374,64 @@ def process_query_file(
     return summary
 
 
+def require_hda_client() -> None:
+    if Client is None or Configuration is None:
+        raise RuntimeError(
+            "Backend `hda` richiesto ma il pacchetto ufficiale non e installato. "
+            "Installa con `pip install hda`."
+        )
+
+
+def process_query_file_via_hda(
+    client: Any,
+    query_path: Path,
+    output_root: Path,
+    *,
+    dry_run: bool,
+) -> dict[str, Any]:
+    query = load_query(query_path)
+    query_name = query_path.stem
+    destination_dir = output_root / query_name
+    destination_dir.mkdir(parents=True, exist_ok=True)
+
+    matches = client.search(query)
+    results = getattr(matches, "results", [])
+    if not isinstance(results, list):
+        results = list(results)
+
+    summary: dict[str, Any] = {
+        "query_file": str(query_path),
+        "dataset_id": str(query.get("dataset_id", "")),
+        "feature_count": len(results),
+        "downloads": [],
+    }
+
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        properties = result.get("properties") if isinstance(result.get("properties"), dict) else {}
+        location = str(properties.get("location", ""))
+        summary["downloads"].append(
+            {
+                "product_id": str(result.get("id", "")),
+                "location": location,
+                "preferred_name": filename_from_location(location),
+            }
+        )
+
+    if dry_run:
+        return summary
+
+    matches.download(download_dir=str(destination_dir))
+    downloaded_files = sorted(
+        [path for path in destination_dir.rglob("*") if path.is_file()],
+        key=lambda item: item.as_posix().casefold(),
+    )
+    summary["saved_files"] = [str(path) for path in downloaded_files]
+    persist_query_summary(destination_dir / "download_manifest.json", summary)
+    return summary
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Bulk-download WEkEO HDA results from exported query JSON files."
@@ -396,6 +465,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run search only and write manifests without requesting downloads.",
     )
+    parser.add_argument(
+        "--backend",
+        choices=("auto", "rest", "hda"),
+        default="auto",
+        help="Backend di download: `hda` usa il client ufficiale WEkEO, `rest` usa il client interno.",
+    )
     return parser.parse_args()
 
 
@@ -412,25 +487,45 @@ def main() -> None:
     output_root = Path(args.output_dir).expanduser().resolve()
     query_paths = [Path(path).expanduser().resolve() for path in args.query]
 
-    print("Authenticating to WEkEO HDA...")
-    token = authenticate(username, password)
-    print("Accepting terms if needed...")
-    accept_terms(token, args.terms)
+    backend = args.backend
+    if backend == "auto":
+        backend = "hda" if Client is not None and Configuration is not None else "rest"
+
+    token = None
+    hda_client = None
+    if backend == "rest":
+        print("Authenticating to WEkEO HDA...")
+        token = authenticate(username, password)
+        print("Accepting terms if needed...")
+        accept_terms(token, args.terms)
+    else:
+        require_hda_client()
+        print("Loading official WEkEO HDA Python client...")
+        hda_client = Client(config=Configuration(user=username, password=password))
 
     overall_summary = {
         "output_dir": str(output_root),
         "queries": [],
         "dry_run": bool(args.dry_run),
+        "backend": backend,
     }
     for query_path in query_paths:
         print(f"Processing query: {query_path}")
-        summary = process_query_file(
-            token,
-            query_path,
-            output_root,
-            dry_run=args.dry_run,
-            pause_seconds=max(args.pause_seconds, 0.0),
-        )
+        if backend == "rest":
+            summary = process_query_file(
+                token,
+                query_path,
+                output_root,
+                dry_run=args.dry_run,
+                pause_seconds=max(args.pause_seconds, 0.0),
+            )
+        else:
+            summary = process_query_file_via_hda(
+                hda_client,
+                query_path,
+                output_root,
+                dry_run=args.dry_run,
+            )
         overall_summary["queries"].append(summary)
 
     write_json(output_root / "batch_manifest.json", overall_summary)

@@ -270,14 +270,16 @@ def expected_feature_count(query_dir: Path) -> int | None:
 
 
 def collect_raw_query_tiles(query_dir: Path) -> list[Path]:
-    files = sorted(
-        [
-            path
-            for path in query_dir.iterdir()
-            if path.is_file() and path.suffix.casefold() not in IGNORED_STAGE_SUFFIXES
-        ],
-        key=lambda item: item.name.casefold(),
-    )
+    files = []
+    for path in sorted(query_dir.rglob("*"), key=lambda item: item.as_posix().casefold()):
+        if not path.is_file():
+            continue
+        if path.suffix.casefold() in IGNORED_STAGE_SUFFIXES:
+            continue
+        kind = sniff_raw_container_kind(path)
+        if kind == "unknown":
+            continue
+        files.append(path)
     expected = expected_feature_count(query_dir)
     actual = len(files)
     if expected is not None and actual < expected:
