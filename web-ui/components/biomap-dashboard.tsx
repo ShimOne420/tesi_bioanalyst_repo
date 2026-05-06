@@ -47,7 +47,15 @@ function formatNumber(value: number | null, unit: string) {
     return "n.d.";
   }
 
-  return `${value.toFixed(2)} ${unit}`;
+  return unit ? `${value.toFixed(2)} ${unit}` : value.toFixed(2);
+}
+
+function formatNumberWithDigits(value: number | null, digits: number, unit = "") {
+  if (value === null || Number.isNaN(value)) {
+    return "n.d.";
+  }
+
+  return unit ? `${value.toFixed(digits)} ${unit}` : value.toFixed(digits);
 }
 
 export function BiomapDashboard() {
@@ -233,8 +241,8 @@ export function BiomapDashboard() {
         <p>
           Questa interfaccia e pensata per il progetto BioMap: puoi scegliere una citta
           europea oppure disegnare manualmente un rettangolo sulla mappa, definire il
-          periodo e ottenere in output specie osservate, temperatura media e
-          precipitazioni medie.
+          periodo e ottenere in output gli indicatori osservativi validati: clima,
+          vegetazione, acqua del suolo, cropland e specie osservate.
         </p>
       </section>
 
@@ -379,8 +387,9 @@ export function BiomapDashboard() {
               </div>
 
               <p className="small-note">
-                Se le specie risultano spesso vuote su aree molto piccole, allarga la finestra
-                della citta oppure seleziona un rettangolo piu grande.
+                Se alcune variabili risultano non disponibili su aree molto piccole o periodi
+                specifici, prova ad allargare la finestra della citta oppure seleziona un
+                rettangolo piu grande.
               </p>
 
               {error ? <div className="status error">{error}</div> : null}
@@ -430,6 +439,26 @@ export function BiomapDashboard() {
                 <strong>{formatNumber(latestRow?.precipitation_mean_area_mm ?? null, "mm")}</strong>
               </div>
               <div className="stat-card">
+                <span>NDVI ultimo mese</span>
+                <strong>{formatNumberWithDigits(latestRow?.ndvi_mean_area ?? null, 3)}</strong>
+              </div>
+              <div className="stat-card">
+                <span>Suolo superficiale ultimo mese</span>
+                <strong>
+                  {formatNumberWithDigits(latestRow?.soil_water_surface_mean_area ?? null, 3, "m3/m3")}
+                </strong>
+              </div>
+              <div className="stat-card">
+                <span>Suolo profondo ultimo mese</span>
+                <strong>
+                  {formatNumberWithDigits(latestRow?.soil_water_deep_mean_area ?? null, 3, "m3/m3")}
+                </strong>
+              </div>
+              <div className="stat-card">
+                <span>Cropland ultimo mese</span>
+                <strong>{formatNumberWithDigits(latestRow?.cropland_mean_area ?? null, 2)}</strong>
+              </div>
+              <div className="stat-card">
                 <span>Specie osservate ultimo mese</span>
                 <strong>
                   {latestRow?.species_count_observed_area === null ||
@@ -446,7 +475,7 @@ export function BiomapDashboard() {
                 <p className="section-copy">
                   Tabella mensile dell&apos;area selezionata. Se l&apos;app e collegata al
                   backend locale o a un backend remoto, qui vedrai i dati reali; altrimenti
-                  viene mostrata una demo trasparente.
+                  viene mostrata una demo trasparente con lo stesso schema multi-variabile.
                 </p>
 
                 <p className="small-note">
@@ -474,6 +503,10 @@ export function BiomapDashboard() {
                         <th>Mese</th>
                         <th>Temperatura media</th>
                         <th>Precipitazioni medie</th>
+                        <th>NDVI</th>
+                        <th>Suolo superficiale</th>
+                        <th>Suolo profondo</th>
+                        <th>Cropland</th>
                         <th>Celle di terra</th>
                         <th>Celle con specie</th>
                         <th>Specie osservate</th>
@@ -485,6 +518,10 @@ export function BiomapDashboard() {
                           <td>{row.month.slice(0, 7)}</td>
                           <td>{formatNumber(row.temperature_mean_area_c, "°C")}</td>
                           <td>{formatNumber(row.precipitation_mean_area_mm, "mm")}</td>
+                          <td>{formatNumberWithDigits(row.ndvi_mean_area, 3)}</td>
+                          <td>{formatNumberWithDigits(row.soil_water_surface_mean_area, 3, "m3/m3")}</td>
+                          <td>{formatNumberWithDigits(row.soil_water_deep_mean_area, 3, "m3/m3")}</td>
+                          <td>{formatNumberWithDigits(row.cropland_mean_area, 2)}</td>
                           <td>{row.cell_count_land ?? "n.d."}</td>
                           <td>{row.cells_with_species_records ?? "n.d."}</td>
                           <td>{row.species_count_observed_area ?? "n.d."}</td>
@@ -502,7 +539,7 @@ export function BiomapDashboard() {
               <h2 className="section-title">Output</h2>
               <p className="section-copy">
                 Seleziona una citta oppure disegna un rettangolo sulla mappa, scegli il
-                periodo e premi il pulsante di conferma per vedere gli indicatori.
+                periodo e premi il pulsante di conferma per vedere gli indicatori osservativi.
               </p>
 
               {activeBounds ? (

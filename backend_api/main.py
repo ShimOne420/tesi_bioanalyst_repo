@@ -1,4 +1,4 @@
-"""Backend FastAPI locale per interrogare gli indicatori minimi.
+"""Backend FastAPI locale per interrogare gli indicatori osservativi BIOMAP.
 
 Questa API e pensata per lo sviluppo locale:
 
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 import re
 import subprocess
@@ -53,17 +54,24 @@ def slugify(value: str) -> str:
 
 
 # Convertiamo una stringa numerica in float o `None` per costruire il JSON di risposta.
-def parse_float(value: str) -> float | None:
-    if value == "":
+def parse_float(value: str | None) -> float | None:
+    if value is None:
         return None
-    return float(value)
+    text = str(value).strip()
+    if text in {"", "nan", "NaN", "None", "<NA>"}:
+        return None
+    parsed = float(text)
+    return parsed if math.isfinite(parsed) else None
 
 
 # Convertiamo una stringa numerica in intero o `None`.
-def parse_int(value: str) -> int | None:
-    if value == "":
+def parse_int(value: str | None) -> int | None:
+    if value is None:
         return None
-    return int(float(value))
+    text = str(value).strip()
+    if text in {"", "nan", "NaN", "None", "<NA>"}:
+        return None
+    return int(float(text))
 
 
 # Carichiamo una sola volta il catalogo locale completo delle citta europee usato da backend e UI.
@@ -100,7 +108,7 @@ def get_biocube_dir() -> Path:
     return path
 
 
-# Restituiamo i path delle tre sorgenti minime usate dagli indicatori.
+# Restituiamo i path delle sorgenti osservazionali usate dagli indicatori.
 def get_source_paths() -> dict[str, Path]:
     biocube_dir = get_biocube_dir()
     return {
@@ -119,6 +127,22 @@ def get_source_paths() -> dict[str, Path]:
             / "era5-climate-energy-moisture"
             / "era5-climate-energy-moisture-0.nc"
         ),
+        "edaphic": (
+            biocube_dir
+            / "Copernicus"
+            / "ERA5-monthly"
+            / "era5-edaphic"
+            / "era5-edaphic-0.nc"
+        ),
+        "ndvi_csv": biocube_dir / "Land" / "Europe_ndvi_monthly_un_025.csv",
+        "vegetation_dynamic": (
+            biocube_dir
+            / "Copernicus"
+            / "ERA5-monthly"
+            / "era5-land-vegetation"
+            / "data_stream-moda.nc"
+        ),
+        "agriculture": biocube_dir / "Agriculture" / "Europe_combined_agriculture_data.csv",
     }
 
 
@@ -147,28 +171,54 @@ def get_dataset_metadata() -> dict[str, Any]:
     finally:
         ds_prec.close()
 
-    common_start = max(species_min, temp_min, prec_min)
-    common_end = min(species_max, temp_max, prec_max)
+    common_starts = [species_min, temp_min, prec_min]
+    common_ends = [species_max, temp_max, prec_max]
+    sources: dict[str, Any] = {
+        "species": {
+            "minMonth": species_min.strftime("%Y-%m"),
+            "maxMonth": species_max.strftime("%Y-%m"),
+        },
+        "temperature": {
+            "minMonth": temp_min.strftime("%Y-%m"),
+            "maxMonth": temp_max.strftime("%Y-%m"),
+        },
+        "precipitation": {
+            "minMonth": prec_min.strftime("%Y-%m"),
+            "maxMonth": prec_max.strftime("%Y-%m"),
+        },
+    }
+
+    if source_paths["edaphic"].exists():
+        ds_edaphic = xr.open_dataset(source_paths["edaphic"])
+        try:
+            edaphic_times = pd.to_datetime(ds_edaphic["valid_time"].values)
+            edaphic_min = edaphic_times.min().to_period("M").to_timestamp()
+            edaphic_max = edaphic_times.max().to_period("M").to_timestamp()
+        finally:
+            ds_edaphic.close()
+        common_starts.append(edaphic_min)
+        common_ends.append(edaphic_max)
+        sources["soil_water"] = {
+            "minMonth": edaphic_min.strftime("%Y-%m"),
+            "maxMonth": edaphic_max.strftime("%Y-%m"),
+        }
+
+    sources["ndvi"] = {
+        "available": source_paths["ndvi_csv"].exists() or source_paths["vegetation_dynamic"].exists(),
+    }
+    sources["cropland"] = {
+        "available": source_paths["agriculture"].exists(),
+    }
+
+    common_start = max(common_starts)
+    common_end = min(common_ends)
 
     return {
         "period": {
             "minMonth": common_start.strftime("%Y-%m"),
             "maxMonth": common_end.strftime("%Y-%m"),
         },
-        "sources": {
-            "species": {
-                "minMonth": species_min.strftime("%Y-%m"),
-                "maxMonth": species_max.strftime("%Y-%m"),
-            },
-            "temperature": {
-                "minMonth": temp_min.strftime("%Y-%m"),
-                "maxMonth": temp_max.strftime("%Y-%m"),
-            },
-            "precipitation": {
-                "minMonth": prec_min.strftime("%Y-%m"),
-                "maxMonth": prec_max.strftime("%Y-%m"),
-            },
-        },
+        "sources": sources,
         "cities": load_city_catalog(),
     }
 
@@ -184,9 +234,13 @@ def read_monthly_csv(path: Path) -> list[dict[str, Any]]:
                     "month": row["month"],
                     "temperature_mean_area_c": parse_float(row["temperature_mean_area_c"]),
                     "precipitation_mean_area_mm": parse_float(row["precipitation_mean_area_mm"]),
+                    "ndvi_mean_area": parse_float(row.get("ndvi_mean_area")),
+                    "soil_water_surface_mean_area": parse_float(row.get("soil_water_surface_mean_area")),
+                    "soil_water_deep_mean_area": parse_float(row.get("soil_water_deep_mean_area")),
+                    "cropland_mean_area": parse_float(row.get("cropland_mean_area")),
                     "cell_count_land": parse_int(row["cell_count_land"]),
                     "cells_with_species_records": parse_int(row["cells_with_species_records"]),
-                    "species_count_observed_area": parse_int(row["species_count_observed_area"]),
+                    "species_count_observed_area": parse_int(row.get("species_count_observed_area")),
                 }
             )
         return rows
@@ -304,7 +358,7 @@ def run_indicator_job(body: dict[str, Any]) -> dict[str, Any]:
         "start": summary["start"],
         "end": summary["end"],
         "monthly": monthly,
-        "notes": [summary["species_note"]],
+        "notes": summary.get("indicator_notes") or [summary["species_note"]],
         "downloads": {
             "csvUrl": f"/api/download/{label_slug}/csv",
             "excelCsvUrl": f"/api/download/{label_slug}/excel_csv",
@@ -331,7 +385,7 @@ def metadata() -> dict[str, Any]:
     return get_dataset_metadata()
 
 
-# Riceviamo una selezione città o area e restituiamo gli indicatori minimi in JSON.
+# Riceviamo una selezione città o area e restituiamo gli indicatori osservativi BIOMAP in JSON.
 @app.post("/api/indicators")
 def indicators(body: dict[str, Any]) -> dict[str, Any]:
     if not body.get("start") or not body.get("end"):

@@ -7,10 +7,10 @@ Questa cartella contiene il backend locale `FastAPI` del progetto.
 Il backend:
 
 - riceve richieste dalla UI `Next.js`
-- richiama [selected_area_indicators.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/scripts/selected_area_indicators.py)
+- richiama [selected_area_indicators.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/selected_area_indicators.py)
 - legge gli output generati
 - restituisce JSON pronto per il frontend
-- espone anche il catalogo completo delle città europee a partire da [european_cities.json](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo/data/european_cities.json)
+- espone anche il catalogo completo delle città europee a partire da [european_cities.json](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/data/european_cities.json)
 
 ## Endpoint
 
@@ -20,7 +20,7 @@ Il backend:
 - `POST /api/indicators`
 - `GET /api/download/{label}/{file_format}`
 
-`/api/metadata` restituisce il periodo realmente disponibile dei tre layer minimi usati dalla UI.
+`/api/metadata` restituisce il periodo realmente disponibile dei layer osservativi usati dalla UI.
 
 `/api/download/{label}/{file_format}` espone i file prodotti dallo script Python nei formati:
 

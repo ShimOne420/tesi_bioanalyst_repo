@@ -358,19 +358,13 @@ def resolve_forecast_months(start: str, end: str) -> dict[str, pd.Timestamp | bo
     input_prev = observed_months[-2]
     input_last = observed_months[-1]
     forecast_month = shift_month(input_last, 1)
-    climate_last_available = pd.Timestamp("2020-12-01")
-
-    if input_last > climate_last_available:
-        raise SystemExit("Il forecast locale usa ancora il blocco climatico BioCube 2000-2020. Scegli un `end` entro 2020-12.")
-
-    compare_available = forecast_month <= climate_last_available
     return {
         "start_month": start_month,
         "end_month": end_month,
         "input_prev": input_prev,
         "input_last": input_last,
         "forecast_month": forecast_month,
-        "compare_available": compare_available,
+        "compare_available": True,
     }
 
 
@@ -385,6 +379,324 @@ def resolve_source_paths(biocube_dir: Path) -> dict[str, Path]:
             raise FileNotFoundError(f"Sorgente mancante per {key}: {path}")
         resolved[key] = path
     return resolved
+
+
+def scan_netcdf_month_coverage(path: Path) -> dict[str, Any]:
+    with xr.open_dataset(path, engine="netcdf4") as ds:
+        if "valid_time" not in ds.coords:
+            return {
+                "kind": "static_or_non_temporal_netcdf",
+                "available_months": set(),
+                "min_month": None,
+                "max_month": None,
+            }
+        months = pd.to_datetime(ds["valid_time"].values).to_period("M").to_timestamp()
+    month_set = {to_month_start(month) for month in months}
+    return {
+        "kind": "monthly_netcdf",
+        "available_months": month_set,
+        "min_month": min(month_set) if month_set else None,
+        "max_month": max(month_set) if month_set else None,
+    }
+
+
+def scan_species_month_coverage(path: Path) -> dict[str, Any]:
+    species_df = pd.read_parquet(path, columns=["Timestamp"])
+    months = pd.to_datetime(species_df["Timestamp"]).dt.to_period("M").dt.to_timestamp()
+    month_set = {to_month_start(month) for month in months.dropna().tolist()}
+    return {
+        "kind": "monthly_species_parquet",
+        "available_months": month_set,
+        "min_month": min(month_set) if month_set else None,
+        "max_month": max(month_set) if month_set else None,
+    }
+
+
+def scan_forest_year_coverage(path: Path) -> dict[str, Any]:
+    columns = pd.read_csv(path, nrows=0).columns.tolist()
+    years = sorted({int(match.group(1)) for name in columns if (match := re.match(r"Forest_(\d{4})$", str(name)))})
+    return {
+        "kind": "annual_forest_csv",
+        "available_years": years,
+        "min_month": pd.Timestamp(f"{years[0]}-01-01") if years else None,
+        "max_month": pd.Timestamp(f"{years[-1]}-12-01") if years else None,
+    }
+
+
+def scan_agriculture_year_coverage(path: Path) -> dict[str, Any]:
+    columns = pd.read_csv(path, nrows=0).columns.tolist()
+    years = sorted({int(match.group(1)) for name in columns if (match := re.match(r"Agri_(\d{4})$", str(name)))})
+    return {
+        "kind": "annual_agriculture_csv",
+        "available_years": years,
+        "min_month": pd.Timestamp(f"{years[0]}-01-01") if years else None,
+        "max_month": pd.Timestamp(f"{years[-1]}-12-01") if years else None,
+    }
+
+
+def resolve_annual_year_with_fallback(available_years: list[int], year: int) -> tuple[int, bool]:
+    """Sceglie l'anno esatto se disponibile, altrimenti l'ultimo anno <= richiesto."""
+    if not available_years:
+        raise KeyError("Nessun anno disponibile nel dataset annuale.")
+    ordered = sorted({int(item) for item in available_years})
+    if year in ordered:
+        return year, False
+    previous = [item for item in ordered if item <= year]
+    chosen = previous[-1] if previous else ordered[-1]
+    return int(chosen), True
+
+
+def find_forest_year_column(columns: list[str], year: int) -> tuple[str, str | None]:
+    year_columns = sorted(
+        {
+            int(match.group(1)): str(column)
+            for column in columns
+            if (match := re.fullmatch(r"Forest[_\-\s]?(\d{4})", str(column), flags=re.IGNORECASE))
+        }.items()
+    )
+    if not year_columns:
+        raise KeyError("Nessuna colonna annuale `Forest_YYYY` trovata nel CSV forest.")
+    chosen_year, chosen_column = resolve_annual_year_with_fallback([item[0] for item in year_columns], year)[0], None
+    for available_year, column_name in year_columns:
+        if available_year == chosen_year:
+            chosen_column = column_name
+            break
+    if chosen_column is None:
+        raise KeyError(f"Colonna forest non trovata per l'anno risolto {chosen_year}")
+    note = None if chosen_year == year else f"Forest usa `Forest_{chosen_year}` come layer annuale/statico per {year}."
+    return chosen_column, note
+
+
+def find_agriculture_year_column(columns: list[str], year: int) -> tuple[str, str | None]:
+    year_columns = sorted(
+        {
+            int(match.group(1)): str(column)
+            for column in columns
+            if (match := re.fullmatch(r"Agri[_\-\s]?(\d{4})", str(column), flags=re.IGNORECASE))
+        }.items()
+    )
+    if not year_columns:
+        raise KeyError("Nessuna colonna annuale `Agri_YYYY` trovata nel CSV agriculture.")
+    chosen_year, chosen_column = resolve_annual_year_with_fallback([item[0] for item in year_columns], year)[0], None
+    for available_year, column_name in year_columns:
+        if available_year == chosen_year:
+            chosen_column = column_name
+            break
+    if chosen_column is None:
+        raise KeyError(f"Colonna agriculture non trovata per l'anno risolto {chosen_year}")
+    note = None if chosen_year == year else f"{chosen_column} usata come layer annuale/statico per {year}."
+    return chosen_column, note
+
+
+def scan_ndvi_month_coverage(path: Path) -> dict[str, Any]:
+    ndvi_frame = pd.read_csv(path)
+    date_column = next(
+        (name for name in ("Timestamp", "timestamp", "Date", "date", "Month", "month", "valid_time") if name in ndvi_frame.columns),
+        None,
+    )
+    year_column = next((name for name in ("Year", "year", "YEAR", "Anno", "anno") if name in ndvi_frame.columns), None)
+    month_column = next((name for name in ("Month", "month", "MONTH", "Mese", "mese") if name in ndvi_frame.columns), None)
+    ndvi_column = next((name for name in ("NDVI", "ndvi") if name in ndvi_frame.columns), None)
+
+    month_set: set[pd.Timestamp] = set()
+    if year_column and month_column:
+        value_column = ndvi_column or find_value_column(ndvi_frame.columns.tolist(), "NDVI")
+        dated_frame = ndvi_frame.copy()
+        dated_frame["_year"] = pd.to_numeric(dated_frame[year_column], errors="coerce")
+        dated_frame["_month_number"] = dated_frame[month_column].map(month_number_from_value)
+        grouped = dated_frame.dropna(subset=["_year", "_month_number"]).groupby(["_year", "_month_number"])
+        for (year_value, month_value), month_frame in grouped:
+            if numeric_series_has_signal(month_frame[value_column]):
+                month_set.add(pd.Timestamp(year=int(year_value), month=int(month_value), day=1))
+    elif date_column:
+        value_column = ndvi_column or find_value_column(ndvi_frame.columns.tolist(), "NDVI")
+        dated_frame = ndvi_frame.copy()
+        dated_frame["_month"] = pd.to_datetime(dated_frame[date_column], errors="coerce").dt.to_period("M").dt.to_timestamp()
+        for month, month_frame in dated_frame.dropna(subset=["_month"]).groupby("_month"):
+            if numeric_series_has_signal(month_frame[value_column]):
+                month_set.add(to_month_start(month))
+    else:
+        columns = ndvi_frame.columns.tolist()
+        month_pattern = re.compile(r"(20\d{2})[-_]?([01]?\d)")
+        for name in columns:
+            match = month_pattern.search(str(name))
+            if match is None:
+                continue
+            month_int = int(match.group(2))
+            if 1 <= month_int <= 12 and numeric_series_has_signal(ndvi_frame[str(name)]):
+                month_set.add(pd.Timestamp(year=int(match.group(1)), month=month_int, day=1))
+
+    return {
+        "kind": "monthly_ndvi_csv",
+        "available_months": month_set,
+        "min_month": min(month_set) if month_set else None,
+        "max_month": max(month_set) if month_set else None,
+    }
+
+def scan_source_time_coverage(source_key: str, path: Path) -> dict[str, Any]:
+    if source_key in {"surface", "edaphic", "atmos", "climate_a", "climate_b", "land_vegetation_dynamic"}:
+        return scan_netcdf_month_coverage(path)
+    if source_key == "species":
+        return scan_species_month_coverage(path)
+    if source_key == "forest_csv":
+        return scan_forest_year_coverage(path)
+    if source_key == "agriculture_csv":
+        return scan_agriculture_year_coverage(path)
+    if source_key == "land_ndvi_csv":
+        return scan_ndvi_month_coverage(path)
+    return {
+        "kind": "static_or_auxiliary_file",
+        "available_months": set(),
+        "min_month": None,
+        "max_month": None,
+    }
+
+
+def months_missing_from_coverage(coverage: dict[str, Any], months: list[pd.Timestamp]) -> list[pd.Timestamp]:
+    if "available_years" in coverage:
+        available_years = sorted({int(year) for year in coverage["available_years"]})
+        missing = []
+        for month in months:
+            try:
+                resolve_annual_year_with_fallback(available_years, int(month.year))
+            except KeyError:
+                missing.append(month)
+        return missing
+    available_months = coverage.get("available_months", set())
+    return [month for month in months if to_month_start(month) not in available_months]
+
+
+def resolve_vegetation_source_key(
+    source_paths: dict[str, Path],
+    months: list[pd.Timestamp] | None = None,
+) -> str | None:
+    """Sceglie la sorgente vegetation migliore; fallback su LAI se il CSV NDVI non copre i mesi richiesti."""
+    ndvi_path = source_paths.get("land_ndvi_csv")
+    if ndvi_path is not None and ndvi_path.exists():
+        if months is None:
+            return "land_ndvi_csv"
+        try:
+            coverage = scan_source_time_coverage("land_ndvi_csv", ndvi_path)
+            if not months_missing_from_coverage(coverage, months):
+                return "land_ndvi_csv"
+        except Exception:
+            pass
+
+    dynamic_path = source_paths.get("land_vegetation_dynamic")
+    if dynamic_path is not None and dynamic_path.exists():
+        return "land_vegetation_dynamic"
+
+    if ndvi_path is not None and ndvi_path.exists():
+        return "land_ndvi_csv"
+    return None
+
+
+def required_future_source_checks(source_paths: dict[str, Path], input_mode: str = "all") -> list[dict[str, Any]]:
+    input_mode = normalize_input_mode(input_mode)
+    checks = [
+        {"label": "surface", "source_key": "surface", "required": True},
+        {"label": "edaphic", "source_key": "edaphic", "required": True},
+        {"label": "atmospheric", "source_key": "atmos", "required": True},
+        {"label": "climate_a", "source_key": "climate_a", "required": True},
+        {"label": "climate_b", "source_key": "climate_b", "required": True},
+    ]
+    if input_mode == "all":
+        vegetation_key = resolve_vegetation_source_key(source_paths)
+        checks.extend(
+            [
+                {"label": "vegetation", "source_key": vegetation_key, "required": True},
+                {"label": "agriculture", "source_key": "agriculture_csv", "required": True},
+                {"label": "forest", "source_key": "forest_csv", "required": True},
+            ]
+        )
+    return checks
+
+
+def assess_future_inference_availability(
+    source_paths: dict[str, Path],
+    *,
+    input_prev: pd.Timestamp,
+    input_last: pd.Timestamp,
+    forecast_month: pd.Timestamp,
+    input_mode: str = "all",
+) -> dict[str, Any]:
+    input_months = [to_month_start(input_prev), to_month_start(input_last)]
+    compare_months = [to_month_start(input_last), to_month_start(forecast_month)]
+    requested_months = sorted({*input_months, *compare_months})
+    checks = required_future_source_checks(source_paths, input_mode=input_mode)
+    if input_mode == "all":
+        vegetation_key = resolve_vegetation_source_key(source_paths, requested_months)
+        checks = [
+            (
+                {"label": "vegetation", "source_key": vegetation_key, "required": True}
+                if check["label"] == "vegetation"
+                else check
+            )
+            for check in checks
+        ]
+    source_reports = []
+    missing_input: list[str] = []
+    missing_compare: list[str] = []
+
+    for check in checks:
+        source_key = check["source_key"]
+        path = source_paths.get(source_key)
+        if path is None or not path.exists():
+            source_reports.append(
+                {
+                    "label": check["label"],
+                    "source_key": source_key,
+                    "path": None if path is None else str(path),
+                    "exists": False,
+                    "input_missing_months": [month.strftime("%Y-%m") for month in input_months],
+                    "compare_missing_months": [month.strftime("%Y-%m") for month in compare_months],
+                }
+            )
+            missing_input.append(f"{check['label']} ({source_key})")
+            missing_compare.append(f"{check['label']} ({source_key})")
+            continue
+
+        coverage = scan_source_time_coverage(source_key, path)
+        input_missing_months = months_missing_from_coverage(coverage, input_months)
+        compare_missing_months = months_missing_from_coverage(coverage, compare_months)
+        source_reports.append(
+            {
+                "label": check["label"],
+                "source_key": source_key,
+                "path": str(path),
+                "exists": True,
+                "kind": coverage.get("kind"),
+                "min_month": None if coverage.get("min_month") is None else str(coverage["min_month"].date()),
+                "max_month": None if coverage.get("max_month") is None else str(coverage["max_month"].date()),
+                "input_missing_months": [month.strftime("%Y-%m") for month in input_missing_months],
+                "compare_missing_months": [month.strftime("%Y-%m") for month in compare_missing_months],
+            }
+        )
+        if input_missing_months:
+            missing_input.append(f"{check['label']} ({source_key}): {', '.join(month.strftime('%Y-%m') for month in input_missing_months)}")
+        if compare_missing_months:
+            missing_compare.append(f"{check['label']} ({source_key}): {', '.join(month.strftime('%Y-%m') for month in compare_missing_months)}")
+
+    return {
+        "input_mode": normalize_input_mode(input_mode),
+        "input_months": [month.strftime("%Y-%m") for month in input_months],
+        "forecast_month": forecast_month.strftime("%Y-%m"),
+        "forecast_allowed": len(missing_input) == 0,
+        "compare_available": len(missing_compare) == 0,
+        "missing_input_sources": missing_input,
+        "missing_compare_sources": missing_compare,
+        "source_reports": source_reports,
+    }
+
+
+def format_future_availability_error(report: dict[str, Any]) -> str:
+    joined = "\n".join(f"- {item}" for item in report["missing_input_sources"])
+    return (
+        "Il forecast richiesto non puo essere costruito con i dati locali disponibili per i due mesi input.\n"
+        f"Mesi input richiesti: {', '.join(report['input_months'])}\n"
+        "Sorgenti mancanti o non estese:\n"
+        f"{joined}"
+    )
 
 
 # Ritagliamo l'Europa senza `sortby` globale quando la longitudine e in formato 0..360.
@@ -476,6 +788,12 @@ def build_zero_group(var_names: list[str], months: list[pd.Timestamp]) -> dict[s
         name: torch.zeros((len(months), MODEL_HEIGHT, MODEL_WIDTH), dtype=torch.float32)
         for name in var_names
     }
+
+
+def tensor_has_signal(tensor: torch.Tensor, *, eps: float = 1e-8) -> bool:
+    values = tensor.detach().cpu()
+    finite = values[torch.isfinite(values)]
+    return bool(finite.numel() and torch.any(torch.abs(finite) > eps).item())
 
 
 def prepare_yearly_grid_frame(frame: pd.DataFrame, source_name: str) -> pd.DataFrame:
@@ -666,6 +984,13 @@ def month_number_from_value(value) -> int:
         raise
 
 
+def numeric_series_has_signal(values: pd.Series, *, eps: float = 1e-8) -> bool:
+    """Riconosce mesi NDVI realmente informativi, non solo colonne/righe presenti."""
+    numeric = pd.to_numeric(values, errors="coerce")
+    finite = numeric[np.isfinite(numeric)]
+    return bool((finite.abs() > eps).any())
+
+
 def build_vegetation_group_from_ndvi_csv(
     ndvi_path: Path,
     months: list[pd.Timestamp],
@@ -695,6 +1020,8 @@ def build_vegetation_group_from_ndvi_csv(
             ]
             if month_frame.empty:
                 raise KeyError(f"Nessuna riga NDVI trovata per {to_month_start(month):%Y-%m}")
+            if not numeric_series_has_signal(month_frame[value_column]):
+                raise ValueError(f"NDVI CSV senza segnale numerico per {to_month_start(month):%Y-%m}")
             maps.append(yearly_column_to_grid(month_frame, value_column, latitudes, longitudes))
     elif date_column:
         value_column = ndvi_column or find_value_column(ndvi_frame.columns.tolist(), "NDVI")
@@ -704,6 +1031,8 @@ def build_vegetation_group_from_ndvi_csv(
             month_frame = dated_frame[dated_frame["_month"] == to_month_start(month)]
             if month_frame.empty:
                 raise KeyError(f"Nessuna riga NDVI trovata per {to_month_start(month):%Y-%m}")
+            if not numeric_series_has_signal(month_frame[value_column]):
+                raise ValueError(f"NDVI CSV senza segnale numerico per {to_month_start(month):%Y-%m}")
             maps.append(yearly_column_to_grid(month_frame, value_column, latitudes, longitudes))
     else:
         maps = [
@@ -715,16 +1044,24 @@ def build_vegetation_group_from_ndvi_csv(
             )
             for month in months
         ]
-    return {"NDVI": torch.stack(maps)}
+    ndvi = torch.stack(maps)
+    if not tensor_has_signal(ndvi):
+        raise ValueError("NDVI CSV rasterizzato senza segnale sulla griglia BioAnalyst")
+    return {"NDVI": ndvi}
 
 
 def build_forest_group(forest_path: Path, months: list[pd.Timestamp], latitudes: np.ndarray, longitudes: np.ndarray) -> dict[str, torch.Tensor]:
     """Costruisce il gruppo `forest` reale usando Europe_forest_data.csv."""
     forest_frame = prepare_yearly_grid_frame(pd.read_csv(forest_path), "forest")
-    forest_maps = [
-        yearly_column_to_grid(forest_frame, f"Forest_{pd.Timestamp(month).year}", latitudes, longitudes)
-        for month in months
-    ]
+    fallback_notes: set[str] = set()
+    forest_maps = []
+    for month in months:
+        column_name, fallback_note = find_forest_year_column(forest_frame.columns.tolist(), int(pd.Timestamp(month).year))
+        if fallback_note:
+            fallback_notes.add(fallback_note)
+        forest_maps.append(yearly_column_to_grid(forest_frame, column_name, latitudes, longitudes))
+    if fallback_notes:
+        print("  [info] " + " ".join(sorted(fallback_notes)), flush=True)
     return {"Forest": torch.stack(forest_maps)}
 
 
@@ -751,10 +1088,15 @@ def build_agriculture_group(
                 f"Variabili disponibili: {available_variables}"
             )
 
-        maps = [
-            yearly_column_to_grid(variable_frame, f"Agri_{pd.Timestamp(month).year}", latitudes, longitudes)
-            for month in months
-        ]
+        fallback_notes: set[str] = set()
+        maps = []
+        for month in months:
+            column_name, fallback_note = find_agriculture_year_column(variable_frame.columns.tolist(), int(pd.Timestamp(month).year))
+            if fallback_note:
+                fallback_notes.add(f"{variable_name}: {fallback_note}")
+            maps.append(yearly_column_to_grid(variable_frame, column_name, latitudes, longitudes))
+        if fallback_notes:
+            print("  [info] " + " ".join(sorted(fallback_notes)), flush=True)
         group[variable_name] = torch.stack(maps)
 
     return group
@@ -815,14 +1157,21 @@ def build_vegetation_group_from_sources(
     longitudes: np.ndarray,
 ) -> dict[str, torch.Tensor]:
     """Preferisce il CSV NDVI ufficiale BioCube; altrimenti usa la sorgente LAI locale."""
-    if "land_ndvi_csv" in source_paths:
-        return build_vegetation_group_from_ndvi_csv(source_paths["land_ndvi_csv"], months, latitudes, longitudes)
-    return build_vegetation_group(
+    vegetation_key = resolve_vegetation_source_key(source_paths, months)
+    if vegetation_key == "land_ndvi_csv":
+        try:
+            return build_vegetation_group_from_ndvi_csv(source_paths["land_ndvi_csv"], months, latitudes, longitudes)
+        except Exception as exc:
+            print(f"  [warn] NDVI CSV non utilizzabile per i mesi richiesti ({exc}); fallback su proxy LAI", flush=True)
+    vegetation_group = build_vegetation_group(
         require_source_path(source_paths, "land_vegetation_dynamic"),
         months,
         latitudes,
         longitudes,
     )
+    if not tensor_has_signal(vegetation_group["NDVI"]):
+        print("  [warn] Proxy LAI vegetation senza segnale NDVI sulla griglia selezionata", flush=True)
+    return vegetation_group
 
 
 def build_land_group_from_surface(surface_group: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:

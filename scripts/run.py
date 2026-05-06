@@ -351,6 +351,21 @@ def write_streaming_workbook(path: Path, sheets: OrderedDict[str, pd.DataFrame])
         return fallback
 
 
+def write_dataframe_workbook_with_fallback(path: Path, sheets: OrderedDict[str, pd.DataFrame] | dict[str, pd.DataFrame]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with pd.ExcelWriter(path) as writer:
+            for sheet_name, frame in sheets.items():
+                frame.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+        return path
+    except PermissionError:
+        fallback = path.with_name(f"{path.stem}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+        with pd.ExcelWriter(fallback) as writer:
+            for sheet_name, frame in sheets.items():
+                frame.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+        return fallback
+
+
 def export_reliable_feature_plots(
     run_dir: Path,
     manifest: dict[str, Any],
@@ -443,15 +458,23 @@ def build_cell_frame(
     longitudes: np.ndarray,
     predicted_map: np.ndarray,
     observed_map: np.ndarray | None,
+    valid_observation_mask: np.ndarray | None = None,
     bounds: dict[str, float],
     value_label: str,
 ) -> pd.DataFrame:
     rows = []
     for lat_index, lat in enumerate(latitudes):
         for lon_index, lon in enumerate(longitudes):
-            observed_value = None if observed_map is None else float(observed_map[lat_index, lon_index])
             predicted_value = float(predicted_map[lat_index, lon_index])
+            valid_observation = True
+            if valid_observation_mask is not None:
+                valid_observation = bool(valid_observation_mask[lat_index, lon_index])
+            observed_value = None if observed_map is None else float(observed_map[lat_index, lon_index])
             difference = None if observed_value is None else predicted_value - observed_value
+            smape_pct = None
+            if valid_observation and difference is not None:
+                denominator = (abs(predicted_value) + abs(observed_value)) / 2.0
+                smape_pct = 0.0 if denominator <= 1e-12 else float(abs(difference) / denominator * 100.0)
             rows.append(
                 {
                     "lat": float(lat),
@@ -460,6 +483,8 @@ def build_cell_frame(
                     f"observed_{value_label}": observed_value,
                     f"difference_{value_label}": difference,
                     f"abs_error_{value_label}": None if difference is None else abs(difference),
+                    "smape_pct": smape_pct,
+                    "valid_observation": valid_observation,
                     "inside_selected_area": bool(
                         bounds["min_lat"] <= float(lat) <= bounds["max_lat"]
                         and bounds["min_lon"] <= float(lon) <= bounds["max_lon"]
@@ -569,31 +594,73 @@ def compute_summary(frame: pd.DataFrame, value_label: str, scope: str) -> dict[s
     obs_col = f"observed_{value_label}"
     diff_col = f"difference_{value_label}"
     abs_col = f"abs_error_{value_label}"
+    metric_frame = frame
+    if "valid_observation" in frame.columns:
+        metric_frame = frame[frame["valid_observation"]].copy()
+    if metric_frame.empty:
+        metric_frame = frame.iloc[0:0].copy()
 
     summary = {
         "scope": scope,
         "cell_count": int(len(frame)),
-        "predicted_mean": float(frame[pred_col].mean()),
-        "predicted_min": float(frame[pred_col].min()),
-        "predicted_max": float(frame[pred_col].max()),
+        "metric_cell_count": int(len(metric_frame)),
+        "predicted_mean": float(metric_frame[pred_col].mean()) if not metric_frame.empty else math.nan,
+        "predicted_min": float(metric_frame[pred_col].min()) if not metric_frame.empty else math.nan,
+        "predicted_max": float(metric_frame[pred_col].max()) if not metric_frame.empty else math.nan,
     }
-    if obs_col in frame and frame[obs_col].notna().any():
-        observed_mean = float(frame[obs_col].mean())
-        mae = float(frame[abs_col].mean())
-        rmse = float(math.sqrt(float((frame[diff_col] ** 2).mean())))
-        bias = float(frame[diff_col].mean())
+    if obs_col in metric_frame and metric_frame[obs_col].notna().any():
+        observed_metric_frame = metric_frame[metric_frame[obs_col].notna()].copy()
+        observed_values = observed_metric_frame[obs_col].to_numpy(dtype=np.float64)
+        predicted_values = observed_metric_frame[pred_col].to_numpy(dtype=np.float64)
+        diff_values = observed_metric_frame[diff_col].to_numpy(dtype=np.float64)
+        abs_values = observed_metric_frame[abs_col].to_numpy(dtype=np.float64)
+        observed_mean = float(np.mean(observed_values))
+        mae = float(np.mean(abs_values))
+        rmse = float(math.sqrt(float(np.mean(np.square(diff_values)))))
+        bias = float(np.mean(diff_values))
+        corr = math.nan
+        if observed_values.size > 1 and float(np.std(predicted_values)) > 0.0 and float(np.std(observed_values)) > 0.0:
+            corr = float(np.corrcoef(predicted_values, observed_values)[0, 1])
+        smape_mean = math.nan
+        if "smape_pct" in observed_metric_frame.columns and observed_metric_frame["smape_pct"].notna().any():
+            smape_mean = float(observed_metric_frame["smape_pct"].mean())
+        observed_abs_sum = float(np.sum(np.abs(observed_values)))
         summary.update(
             {
                 "observed_mean": observed_mean,
                 "mae": mae,
                 "rmse": rmse,
                 "bias": bias,
+                "correlation": corr,
+                "wape_pct": math.nan if observed_abs_sum <= 1e-12 else float(np.sum(abs_values) / observed_abs_sum * 100.0),
+                "smape_mean_pct": smape_mean,
                 "error_pct_on_abs_observed_mean": None
                 if abs(observed_mean) < 1e-12
                 else float(mae / abs(observed_mean) * 100.0),
             }
         )
     return summary
+
+
+def build_valid_observation_mask(
+    observed_batch: Any | None,
+    *,
+    group: str,
+    variable: str,
+    observed_map: np.ndarray | None,
+) -> np.ndarray | None:
+    if observed_map is None:
+        return None
+    valid_mask = np.isfinite(observed_map)
+    if observed_batch is not None and group != "land":
+        try:
+            land_map, _ = get_batch_variable_map(observed_batch, group_name="land", variable_name="Land")
+            valid_mask &= np.isfinite(land_map) & (land_map > 0.5)
+        except SystemExit:
+            pass
+    if group == "vegetation" and variable == "NDVI":
+        valid_mask &= np.abs(observed_map) > 1e-8
+    return valid_mask
 
 
 def export_feature_matrix_bundle(
@@ -613,6 +680,7 @@ def export_feature_matrix_bundle(
     unit: str,
     area_specs: list[dict[str, Any]],
     matrix_export_format: str = "excel",
+    valid_observation_mask: np.ndarray | None = None,
 ) -> tuple[dict[str, str], pd.DataFrame]:
     export_dir.mkdir(parents=True, exist_ok=True)
     bounds = manifest["bounds"]
@@ -628,6 +696,7 @@ def export_feature_matrix_bundle(
         longitudes=longitudes,
         predicted_map=predicted_map,
         observed_map=observed_map,
+        valid_observation_mask=valid_observation_mask,
         bounds=bounds,
         value_label=value_label,
     )
@@ -654,14 +723,14 @@ def export_feature_matrix_bundle(
     outputs: dict[str, str] = {}
     if export_mode_wants_excel(matrix_export_format):
         workbook_path = export_dir / f"{workbook_prefix}_cell_matrix.xlsx"
-        with pd.ExcelWriter(workbook_path) as writer:
-            summary_frame.to_excel(writer, sheet_name="summary", index=False)
-            area_summary_frame.to_excel(writer, sheet_name="area_summary", index=False)
-            if alignment_diagnostic_frame is not None:
-                alignment_diagnostic_frame.to_excel(writer, sheet_name="alignment_diagnostic", index=False)
-            area_frame.to_excel(writer, sheet_name="selected_area", index=False)
-            frame.to_excel(writer, sheet_name="full_grid", index=False)
-        outputs["matrix_xlsx"] = str(workbook_path)
+        workbook_sheets: OrderedDict[str, pd.DataFrame] = OrderedDict()
+        workbook_sheets["summary"] = summary_frame
+        workbook_sheets["area_summary"] = area_summary_frame
+        if alignment_diagnostic_frame is not None:
+            workbook_sheets["alignment_diagnostic"] = alignment_diagnostic_frame
+        workbook_sheets["selected_area"] = area_frame
+        workbook_sheets["full_grid"] = frame
+        outputs["matrix_xlsx"] = str(write_dataframe_workbook_with_fallback(workbook_path, workbook_sheets))
     if export_mode_wants_csv(matrix_export_format):
         summary_csv_path = export_dir / f"{workbook_prefix}_summary.csv"
         full_csv_path = export_dir / f"{workbook_prefix}_full_grid.csv"
@@ -721,6 +790,12 @@ def export_reliable_feature_workbooks(
                 observed_map, _ = get_batch_variable_map(observed_batch, group_name=group, variable_name=variable)
             except SystemExit as exc:
                 outputs["missing_features"].append({"group": group, "variable": variable, "reason": str(exc)})
+        valid_observation_mask = build_valid_observation_mask(
+            observed_batch,
+            group=group,
+            variable=variable,
+            observed_map=observed_map,
+        )
         feature_outputs, _ = export_feature_matrix_bundle(
             run_dir=run_dir,
             export_dir=feature_dir,
@@ -737,6 +812,7 @@ def export_reliable_feature_workbooks(
             unit=unit,
             area_specs=area_specs,
             matrix_export_format=matrix_export_format,
+            valid_observation_mask=valid_observation_mask,
         )
         outputs["features"][file_prefix] = feature_outputs
     return outputs
@@ -1016,6 +1092,12 @@ def export_maps_and_matrix(
         outputs["observed_png"] = str(observed_png)
         outputs["difference_png"] = str(difference_png)
 
+    valid_observation_mask = build_valid_observation_mask(
+        observed_batch,
+        group=group,
+        variable=variable,
+        observed_map=observed_map,
+    )
     matrix_outputs, area_summary_frame = export_feature_matrix_bundle(
         run_dir=run_dir,
         export_dir=export_dir,
@@ -1032,6 +1114,7 @@ def export_maps_and_matrix(
         unit=unit,
         area_specs=area_specs,
         matrix_export_format=matrix_export_format,
+        valid_observation_mask=valid_observation_mask,
     )
     outputs.update(matrix_outputs)
     return outputs, area_summary_frame
@@ -1161,8 +1244,15 @@ def main() -> None:
         args=args,
         project_output_dir=env["project_output_dir"],
         model_dir=env["model_dir"],
+        source_paths=env["source_paths"],
         run_suffix="native_one_step",
     )
+    if not context.months_info["compare_available"] and not args.no_compare_observed:
+        print(
+            "[warn] Il forecast e costruibile, ma il target osservato del mese previsto non e disponibile "
+            "con le sorgenti locali correnti. Il run procedera senza confronto observed.",
+            flush=True,
+        )
     compare_month = (
         context.months_info["forecast_month"]
         if context.months_info["compare_available"] and not args.no_compare_observed
