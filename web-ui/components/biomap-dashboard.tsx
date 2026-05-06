@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { buildBoundsFromCity, CITY_OPTIONS } from "../lib/cities";
-import type { DatasetMetadata, IndicatorResponse, SelectionBounds } from "../lib/types";
+import type { DatasetMetadata, IndicatorResponse, IndicatorRow, SelectionBounds } from "../lib/types";
 
 const EuropeSelectionMap = dynamic(
   () => import("./europe-selection-map").then((mod) => mod.EuropeSelectionMap),
@@ -48,6 +48,106 @@ function formatNumber(value: number | null, unit: string) {
   }
 
   return `${value.toFixed(2)} ${unit}`;
+}
+
+const TABLE_COLUMNS: Array<{
+  label: string;
+  value: (row: IndicatorRow) => string | number | null;
+  display: (row: IndicatorRow) => string | number;
+}> = [
+  {
+    label: "Mese",
+    value: (row) => row.month.slice(0, 7),
+    display: (row) => row.month.slice(0, 7)
+  },
+  {
+    label: "Temperatura media",
+    value: (row) => row.temperature_mean_area_c,
+    display: (row) => formatNumber(row.temperature_mean_area_c, "°C")
+  },
+  {
+    label: "Precipitazioni medie",
+    value: (row) => row.precipitation_mean_area_mm,
+    display: (row) => formatNumber(row.precipitation_mean_area_mm, "mm")
+  },
+  {
+    label: "Celle di terra",
+    value: (row) => row.cell_count_land,
+    display: (row) => row.cell_count_land ?? "n.d."
+  },
+  {
+    label: "Celle con specie",
+    value: (row) => row.cells_with_species_records,
+    display: (row) => row.cells_with_species_records ?? "n.d."
+  },
+  {
+    label: "Specie osservate",
+    value: (row) => row.species_count_observed_area,
+    display: (row) => row.species_count_observed_area ?? "n.d."
+  }
+];
+
+function normalizeExportValue(value: string | number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "";
+  }
+
+  return String(value);
+}
+
+function escapeCsvValue(value: string | number | null | undefined) {
+  const normalized = normalizeExportValue(value);
+  if (/[",\n\r]/.test(normalized)) {
+    return `"${normalized.replace(/"/g, '""')}"`;
+  }
+
+  return normalized;
+}
+
+function escapeHtmlValue(value: string | number | null | undefined) {
+  return normalizeExportValue(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function downloadBlob(filename: string, content: string, mimeType: string) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function buildExportFilename(result: IndicatorResponse, extension: "csv" | "xls") {
+  const label = result.label.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "selected_area";
+  return `biomap_${label}_${result.start.slice(0, 7)}_${result.end.slice(0, 7)}.${extension}`;
+}
+
+function exportTableAsCsv(result: IndicatorResponse) {
+  const header = TABLE_COLUMNS.map((column) => escapeCsvValue(column.label)).join(",");
+  const rows = result.monthly.map((row) =>
+    TABLE_COLUMNS.map((column) => escapeCsvValue(column.value(row))).join(",")
+  );
+  const csv = `\uFEFF${[header, ...rows].join("\r\n")}`;
+  downloadBlob(buildExportFilename(result, "csv"), csv, "text/csv;charset=utf-8");
+}
+
+function exportTableAsExcel(result: IndicatorResponse) {
+  const header = TABLE_COLUMNS.map((column) => `<th>${escapeHtmlValue(column.label)}</th>`).join("");
+  const rows = result.monthly
+    .map((row) => {
+      const cells = TABLE_COLUMNS.map((column) => `<td>${escapeHtmlValue(column.value(row))}</td>`).join("");
+      return `<tr>${cells}</tr>`;
+    })
+    .join("");
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8" /></head><body><table><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table></body></html>`;
+  downloadBlob(buildExportFilename(result, "xls"), html, "application/vnd.ms-excel;charset=utf-8");
 }
 
 export function BiomapDashboard() {
@@ -453,8 +553,16 @@ export function BiomapDashboard() {
                   Periodo effettivamente calcolato: {result.start.slice(0, 7)} → {result.end.slice(0, 7)}
                 </p>
 
-                {result.downloads ? (
-                  <div className="action-row" style={{ marginBottom: 16 }}>
+                <div className="action-row" style={{ marginBottom: 16 }}>
+                  <button className="secondary-button" type="button" onClick={() => exportTableAsCsv(result)}>
+                    Esporta tabella CSV
+                  </button>
+                  <button className="secondary-button" type="button" onClick={() => exportTableAsExcel(result)}>
+                    Esporta tabella Excel
+                  </button>
+
+                  {result.downloads ? (
+                    <>
                     <Link className="secondary-button" href={result.downloads.csvUrl}>
                       Scarica CSV
                     </Link>
@@ -464,30 +572,25 @@ export function BiomapDashboard() {
                     <Link className="secondary-button" href={result.downloads.xlsxUrl}>
                       Scarica XLSX
                     </Link>
-                  </div>
-                ) : null}
+                    </>
+                  ) : null}
+                </div>
 
                 <div className="table-shell">
                   <table>
                     <thead>
                       <tr>
-                        <th>Mese</th>
-                        <th>Temperatura media</th>
-                        <th>Precipitazioni medie</th>
-                        <th>Celle di terra</th>
-                        <th>Celle con specie</th>
-                        <th>Specie osservate</th>
+                        {TABLE_COLUMNS.map((column) => (
+                          <th key={column.label}>{column.label}</th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody>
                       {result.monthly.map((row) => (
                         <tr key={row.month}>
-                          <td>{row.month.slice(0, 7)}</td>
-                          <td>{formatNumber(row.temperature_mean_area_c, "°C")}</td>
-                          <td>{formatNumber(row.precipitation_mean_area_mm, "mm")}</td>
-                          <td>{row.cell_count_land ?? "n.d."}</td>
-                          <td>{row.cells_with_species_records ?? "n.d."}</td>
-                          <td>{row.species_count_observed_area ?? "n.d."}</td>
+                          {TABLE_COLUMNS.map((column) => (
+                            <td key={column.label}>{column.display(row)}</td>
+                          ))}
                         </tr>
                       ))}
                     </tbody>

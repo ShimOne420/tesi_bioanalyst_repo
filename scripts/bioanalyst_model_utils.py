@@ -667,6 +667,26 @@ def month_number_from_value(value) -> int:
         raise
 
 
+def numeric_series_has_signal(values: pd.Series, *, eps: float = 1e-8) -> bool:
+    """Riconosce un mese NDVI informativo, non solo presente come colonna/riga."""
+    numeric = pd.to_numeric(values, errors="coerce")
+    finite = numeric[np.isfinite(numeric)]
+    return bool((finite.abs() > eps).any())
+
+
+def tensor_has_signal(tensor: torch.Tensor, *, eps: float = 1e-8) -> bool:
+    values = tensor.detach().cpu()
+    finite = values[torch.isfinite(values)]
+    return bool(finite.numel() and torch.any(torch.abs(finite) > eps).item())
+
+
+def require_ndvi_month_signal(tensor: torch.Tensor, month: pd.Timestamp, source_label: str) -> torch.Tensor:
+    """Blocca NDVI mensile tutto zero prima che diventi un observed falso."""
+    if not tensor_has_signal(tensor):
+        raise ValueError(f"{source_label} senza segnale NDVI per {to_month_start(month):%Y-%m}")
+    return tensor
+
+
 def build_vegetation_group_from_ndvi_csv(
     ndvi_path: Path,
     months: list[pd.Timestamp],
@@ -696,7 +716,15 @@ def build_vegetation_group_from_ndvi_csv(
             ]
             if month_frame.empty:
                 raise KeyError(f"Nessuna riga NDVI trovata per {to_month_start(month):%Y-%m}")
-            maps.append(yearly_column_to_grid(month_frame, value_column, latitudes, longitudes))
+            if not numeric_series_has_signal(month_frame[value_column]):
+                raise ValueError(f"NDVI CSV senza valori utili per {to_month_start(month):%Y-%m}")
+            maps.append(
+                require_ndvi_month_signal(
+                    yearly_column_to_grid(month_frame, value_column, latitudes, longitudes),
+                    month,
+                    "NDVI CSV rasterizzato",
+                )
+            )
     elif date_column:
         value_column = ndvi_column or find_value_column(ndvi_frame.columns.tolist(), "NDVI")
         dated_frame = ndvi_frame.copy()
@@ -705,17 +733,27 @@ def build_vegetation_group_from_ndvi_csv(
             month_frame = dated_frame[dated_frame["_month"] == to_month_start(month)]
             if month_frame.empty:
                 raise KeyError(f"Nessuna riga NDVI trovata per {to_month_start(month):%Y-%m}")
-            maps.append(yearly_column_to_grid(month_frame, value_column, latitudes, longitudes))
-    else:
-        maps = [
-            yearly_column_to_grid(
-                ndvi_frame,
-                find_monthly_column(ndvi_frame.columns.tolist(), "NDVI", month),
-                latitudes,
-                longitudes,
+            if not numeric_series_has_signal(month_frame[value_column]):
+                raise ValueError(f"NDVI CSV senza valori utili per {to_month_start(month):%Y-%m}")
+            maps.append(
+                require_ndvi_month_signal(
+                    yearly_column_to_grid(month_frame, value_column, latitudes, longitudes),
+                    month,
+                    "NDVI CSV rasterizzato",
+                )
             )
-            for month in months
-        ]
+    else:
+        for month in months:
+            column_name = find_monthly_column(ndvi_frame.columns.tolist(), "NDVI", month)
+            if not numeric_series_has_signal(ndvi_frame[column_name]):
+                raise ValueError(f"Colonna {column_name} senza valori NDVI utili per {to_month_start(month):%Y-%m}")
+            maps.append(
+                require_ndvi_month_signal(
+                    yearly_column_to_grid(ndvi_frame, column_name, latitudes, longitudes),
+                    month,
+                    f"NDVI CSV rasterizzato da {column_name}",
+                )
+            )
     return {"NDVI": torch.stack(maps)}
 
 
@@ -805,6 +843,12 @@ def build_vegetation_group(
             )
 
         ndvi = ndvi.load()
+        for month_index, month in enumerate(months):
+            require_ndvi_month_signal(
+                torch.from_numpy(ndvi.isel(valid_time=month_index).values.astype(np.float32)),
+                month,
+                "vegetation NetCDF/LAI proxy",
+            )
 
     return {"NDVI": torch.from_numpy(ndvi.values.astype(np.float32))}
 
@@ -817,7 +861,10 @@ def build_vegetation_group_from_sources(
 ) -> dict[str, torch.Tensor]:
     """Preferisce il CSV NDVI ufficiale BioCube; altrimenti usa la sorgente LAI locale."""
     if "land_ndvi_csv" in source_paths:
-        return build_vegetation_group_from_ndvi_csv(source_paths["land_ndvi_csv"], months, latitudes, longitudes)
+        try:
+            return build_vegetation_group_from_ndvi_csv(source_paths["land_ndvi_csv"], months, latitudes, longitudes)
+        except (KeyError, ValueError, OSError, pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
+            print(f"  [warn] NDVI CSV non utilizzabile per i mesi richiesti ({exc}); provo fallback LAI", flush=True)
     return build_vegetation_group(
         require_source_path(source_paths, "land_vegetation_dynamic"),
         months,
@@ -1065,20 +1112,13 @@ def save_window_batches(
                 input_mode=target_input_mode,
             )
         except Exception as exc:
-            if input_mode != "clean":
-                raise
-            target_input_mode = input_mode
-            print(
-                "  [warn] Target observed completo non costruibile; fallback a input-mode clean "
-                f"({exc}). NDVI/agriculture/forest observed saranno placeholder zero.",
-                flush=True,
-            )
-            target_batch = build_raw_batch_for_months(
-                source_paths,
-                target_months,
-                use_atmospheric_data=use_atmospheric_data,
-                input_mode=target_input_mode,
-            )
+            raise RuntimeError(
+                "Target observed non costruibile con vegetation/agriculture/forest reali. "
+                "Mi fermo per evitare un NDVI osservato placeholder a zero. "
+                "Controlla `Land/Europe_ndvi_monthly_un_025.csv` e il fallback "
+                "`Copernicus/ERA5-monthly/era5-land-vegetation/data_stream-moda.nc` "
+                f"per i mesi {', '.join(month.strftime('%Y-%m') for month in target_months)}."
+            ) from exc
         torch.save(
             target_batch,
             target_path,

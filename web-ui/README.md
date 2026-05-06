@@ -12,6 +12,7 @@ L'app permette di:
 - disegnare manualmente un rettangolo sulla mappa d'Europa
 - inviare la selezione a un backend
 - visualizzare in output i tre indicatori minimi per mese
+- esportare la tabella visualizzata in `CSV` o `Excel`
 - scaricare l'output mensile in `CSV`, `CSV per Excel` o `XLSX`
 
 ## Architettura
