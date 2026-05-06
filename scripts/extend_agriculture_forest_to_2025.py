@@ -20,9 +20,13 @@ Assunzioni del v1:
 from __future__ import annotations
 
 import argparse
+import bz2
+import gzip
 import json
+import lzma
 import re
 import shutil
+import tarfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -141,6 +145,9 @@ TIFF_MAGIC_PREFIXES = (
     b"II+\x00",
     b"MM\x00+",
 )
+GZIP_MAGIC_PREFIX = b"\x1f\x8b"
+BZIP2_MAGIC_PREFIX = b"BZh"
+XZ_MAGIC_PREFIX = b"\xfd7zXZ\x00"
 
 
 def normalize_token(value: str) -> str:
@@ -306,11 +313,19 @@ def source_description(source: Any) -> str:
 
 def sniff_raw_container_kind(path: Path) -> str:
     with path.open("rb") as handle:
-        header = handle.read(8)
+        header = handle.read(512)
     if any(header.startswith(prefix) for prefix in TIFF_MAGIC_PREFIXES):
         return "tiff"
     if header.startswith(b"PK\x03\x04"):
         return "zip"
+    if header.startswith(GZIP_MAGIC_PREFIX):
+        return "gzip"
+    if header.startswith(BZIP2_MAGIC_PREFIX):
+        return "bzip2"
+    if header.startswith(XZ_MAGIC_PREFIX):
+        return "xz"
+    if len(header) >= 262 and header[257:262] == b"ustar":
+        return "tar"
     return "unknown"
 
 
@@ -356,6 +371,70 @@ def extract_raster_members(container_path: Path) -> list[Path]:
     return extracted
 
 
+def extract_tar_raster_members(container_path: Path) -> list[Path]:
+    extract_dir = extracted_tile_dir(container_path)
+    if extract_dir.exists():
+        existing = sorted(
+            [
+                path
+                for path in extract_dir.rglob("*")
+                if path.is_file() and path.suffix.casefold() in {".tif", ".tiff"}
+            ],
+            key=lambda item: item.as_posix().casefold(),
+        )
+        if existing:
+            return existing
+
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(container_path, mode="r:*") as archive:
+        raster_members = [
+            member
+            for member in archive.getmembers()
+            if member.isfile() and member.name.lower().endswith((".tif", ".tiff"))
+        ]
+        if not raster_members:
+            raise ValueError(f"{container_path.name}: archivio tar senza raster .tif/.tiff")
+        archive.extractall(extract_dir, members=raster_members)
+
+    extracted = sorted(
+        [
+            path
+            for path in extract_dir.rglob("*")
+            if path.is_file() and path.suffix.casefold() in {".tif", ".tiff"}
+        ],
+        key=lambda item: item.as_posix().casefold(),
+    )
+    if not extracted:
+        raise ValueError(f"{container_path.name}: estrazione tar completata ma nessun raster trovato")
+    return extracted
+
+
+def extract_single_compressed_raster(container_path: Path, opener) -> list[Path]:
+    extract_dir = extracted_tile_dir(container_path)
+    target_path = extract_dir / f"{container_path.name}.tif"
+    if target_path.exists():
+        return [target_path]
+
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    with opener(container_path, "rb") as source, target_path.open("wb") as handle:
+        shutil.copyfileobj(source, handle)
+
+    with target_path.open("rb") as handle:
+        header = handle.read(8)
+    if not any(header.startswith(prefix) for prefix in TIFF_MAGIC_PREFIXES):
+        raise ValueError(
+            f"{container_path.name}: stream decompresso ma il contenuto non e un GeoTIFF riconosciuto"
+        )
+    return [target_path]
+
+
+def extract_gzip_like_rasters(container_path: Path, opener) -> list[Path]:
+    try:
+        return extract_tar_raster_members(container_path)
+    except tarfile.TarError:
+        return extract_single_compressed_raster(container_path, opener)
+
+
 def expand_raster_tile_paths(tile_paths: list[Path]) -> list[Path]:
     expanded: list[Path] = []
     for tile_path in tile_paths:
@@ -366,9 +445,21 @@ def expand_raster_tile_paths(tile_paths: list[Path]) -> list[Path]:
         if kind == "zip":
             expanded.extend(extract_raster_members(tile_path))
             continue
+        if kind == "tar":
+            expanded.extend(extract_tar_raster_members(tile_path))
+            continue
+        if kind == "gzip":
+            expanded.extend(extract_gzip_like_rasters(tile_path, gzip.open))
+            continue
+        if kind == "bzip2":
+            expanded.extend(extract_gzip_like_rasters(tile_path, bz2.open))
+            continue
+        if kind == "xz":
+            expanded.extend(extract_gzip_like_rasters(tile_path, lzma.open))
+            continue
         raise ValueError(
             f"{tile_path}: formato raw non riconosciuto. "
-            "Atteso GeoTIFF o ZIP contenente GeoTIFF."
+            "Atteso GeoTIFF o archivio ZIP/TAR/GZIP/BZIP2/XZ contenente GeoTIFF."
         )
     if not expanded:
         raise ValueError("Nessun raster utilizzabile trovato dopo l'espansione dei tile raw")
