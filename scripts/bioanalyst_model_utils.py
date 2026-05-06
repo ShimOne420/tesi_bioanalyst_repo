@@ -512,12 +512,25 @@ def yearly_column_to_grid(
     useful = frame[["Latitude", "Longitude", column_name]].dropna(subset=[column_name])
     grouped = useful.groupby(["Latitude", "Longitude"], as_index=False)[column_name].mean()
 
+    matched = 0
+    skipped = 0
     for lat_value, lon_value, data_value in grouped[["Latitude", "Longitude", column_name]].itertuples(index=False, name=None):
         lat_key = round(float(lat_value), 2)
         lon_key = round(float(lon_value), 2)
         if lat_key not in lat_index or lon_key not in lon_index:
+            skipped += 1
             continue
         tensor[lat_index[lat_key], lon_index[lon_key]] = float(data_value)
+        matched += 1
+
+    total = len(grouped)
+    print(f"  [debug] yearly_column_to_grid: {matched}/{total} coordinate match (saltate {skipped}) per {column_name}", flush=True)
+    if matched == 0 and total > 0:
+        print(f"  [warn] Nessuna coordinata CSV allineata alla griglia del modello!", flush=True)
+        print(f"  [debug] Esempio lat_key: {round(float(grouped.iloc[0]['Latitude']), 2) if total > 0 else 'N/A'}", flush=True)
+        print(f"  [debug] Esempio lon_key: {round(float(grouped.iloc[0]['Longitude']), 2) if total > 0 else 'N/A'}", flush=True)
+        print(f"  [debug] Primo lat_index: {list(lat_index.keys())[0] if lat_index else 'vuoto'}", flush=True)
+        print(f"  [debug] Primo lon_index: {list(lon_index.keys())[0] if lon_index else 'vuoto'}", flush=True)
 
     return tensor
 
@@ -537,8 +550,10 @@ def find_monthly_column(columns: list[str], variable_name: str, month: pd.Timest
         f"{variable_name}_{month:%Y-%m}",
         f"{variable_name}_{month:%Y%m}",
         f"{variable_name}_{month:%Y-%m-%d}",
-        f"{variable_name}_{month.year}_{month_number}",
+        f"{variable_name}_{month.year}_{month_number:02d}",
         f"{variable_name}_{month.year}-{month_number}",
+        f"{variable_name}_{month_number:02d}/{month.year}",
+        f"{variable_name}_{month_number}/{month.year}",
         f"{month:%Y_%m}_{variable_name}",
         f"{month:%Y-%m}_{variable_name}",
         f"{month:%Y_%m}",
@@ -694,7 +709,9 @@ def build_vegetation_group_from_ndvi_csv(
     longitudes: np.ndarray,
 ) -> dict[str, torch.Tensor]:
     """Costruisce il canale NDVI dal CSV ufficiale BioCube quando e disponibile."""
+    print(f"  [debug] Leggo NDVI CSV: {ndvi_path}", flush=True)
     ndvi_frame = prepare_yearly_grid_frame(pd.read_csv(ndvi_path), "ndvi")
+    print(f"  [debug] NDVI CSV caricato: {len(ndvi_frame)} righe, colonne: {list(ndvi_frame.columns)[:10]}", flush=True)
     date_column = next(
         (name for name in ("Timestamp", "timestamp", "Date", "date", "Month", "month", "valid_time") if name in ndvi_frame.columns),
         None,
@@ -702,6 +719,7 @@ def build_vegetation_group_from_ndvi_csv(
     year_column = next((name for name in ("Year", "year", "YEAR", "Anno", "anno") if name in ndvi_frame.columns), None)
     month_column = next((name for name in ("Month", "month", "MONTH", "Mese", "mese") if name in ndvi_frame.columns), None)
     ndvi_column = next((name for name in ("NDVI", "ndvi") if name in ndvi_frame.columns), None)
+    print(f"  [debug] Date column: {date_column}, Year: {year_column}, Month: {month_column}, NDVI: {ndvi_column}", flush=True)
 
     maps = []
     if year_column and month_column:
@@ -861,10 +879,19 @@ def build_vegetation_group_from_sources(
 ) -> dict[str, torch.Tensor]:
     """Preferisce il CSV NDVI ufficiale BioCube; altrimenti usa la sorgente LAI locale."""
     if "land_ndvi_csv" in source_paths:
+        ndvi_csv_path = source_paths["land_ndvi_csv"]
+        print(f"  [debug] Provo a caricare NDVI da CSV: {ndvi_csv_path}", flush=True)
+        if not ndvi_csv_path.exists():
+            print(f"  [warn] NDVI CSV non trovato: {ndvi_csv_path}", flush=True)
+        else:
+            print(f"  [debug] NDVI CSV esiste: {ndvi_csv_path.stat().st_size} bytes", flush=True)
         try:
-            return build_vegetation_group_from_ndvi_csv(source_paths["land_ndvi_csv"], months, latitudes, longitudes)
+            return build_vegetation_group_from_ndvi_csv(ndvi_csv_path, months, latitudes, longitudes)
         except (KeyError, ValueError, OSError, pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
             print(f"  [warn] NDVI CSV non utilizzabile per i mesi richiesti ({exc}); provo fallback LAI", flush=True)
+    else:
+        print(f"  [debug] 'land_ndvi_csv' non presente in source_paths. Chiavi: {list(source_paths.keys())}", flush=True)
+    print(f"  [debug] Uso fallback LAI da NetCDF", flush=True)
     return build_vegetation_group(
         require_source_path(source_paths, "land_vegetation_dynamic"),
         months,
