@@ -317,6 +317,17 @@ def scan_agriculture_year_coverage(path: Path) -> dict[str, Any]:
     }
 
 
+def resolve_annual_year_with_fallback(available_years: list[int], year: int) -> tuple[int, bool]:
+    if not available_years:
+        raise KeyError("Nessun anno disponibile nel dataset annuale.")
+    ordered = sorted({int(item) for item in available_years})
+    if year in ordered:
+        return year, False
+    previous = [item for item in ordered if item <= year]
+    chosen = previous[-1] if previous else ordered[-1]
+    return int(chosen), True
+
+
 def scan_ndvi_month_coverage(path: Path) -> dict[str, Any]:
     ndvi_frame = pd.read_csv(path)
     date_column = next(
@@ -382,8 +393,14 @@ def scan_source_time_coverage(source_key: str, path: Path) -> dict[str, Any]:
 
 def months_missing_from_coverage(coverage: dict[str, Any], months: list[pd.Timestamp]) -> list[pd.Timestamp]:
     if "available_years" in coverage:
-        available_years = set(int(year) for year in coverage["available_years"])
-        return [month for month in months if int(month.year) not in available_years]
+        available_years = sorted({int(year) for year in coverage["available_years"]})
+        missing = []
+        for month in months:
+            try:
+                resolve_annual_year_with_fallback(available_years, int(month.year))
+            except KeyError:
+                missing.append(month)
+        return missing
     available_months = coverage.get("available_months", set())
     return [month for month in months if to_month_start(month) not in available_months]
 

@@ -434,6 +434,60 @@ def scan_agriculture_year_coverage(path: Path) -> dict[str, Any]:
     }
 
 
+def resolve_annual_year_with_fallback(available_years: list[int], year: int) -> tuple[int, bool]:
+    """Sceglie l'anno esatto se disponibile, altrimenti l'ultimo anno <= richiesto."""
+    if not available_years:
+        raise KeyError("Nessun anno disponibile nel dataset annuale.")
+    ordered = sorted({int(item) for item in available_years})
+    if year in ordered:
+        return year, False
+    previous = [item for item in ordered if item <= year]
+    chosen = previous[-1] if previous else ordered[-1]
+    return int(chosen), True
+
+
+def find_forest_year_column(columns: list[str], year: int) -> tuple[str, str | None]:
+    year_columns = sorted(
+        {
+            int(match.group(1)): str(column)
+            for column in columns
+            if (match := re.fullmatch(r"Forest[_\-\s]?(\d{4})", str(column), flags=re.IGNORECASE))
+        }.items()
+    )
+    if not year_columns:
+        raise KeyError("Nessuna colonna annuale `Forest_YYYY` trovata nel CSV forest.")
+    chosen_year, chosen_column = resolve_annual_year_with_fallback([item[0] for item in year_columns], year)[0], None
+    for available_year, column_name in year_columns:
+        if available_year == chosen_year:
+            chosen_column = column_name
+            break
+    if chosen_column is None:
+        raise KeyError(f"Colonna forest non trovata per l'anno risolto {chosen_year}")
+    note = None if chosen_year == year else f"Forest usa `Forest_{chosen_year}` come layer annuale/statico per {year}."
+    return chosen_column, note
+
+
+def find_agriculture_year_column(columns: list[str], year: int) -> tuple[str, str | None]:
+    year_columns = sorted(
+        {
+            int(match.group(1)): str(column)
+            for column in columns
+            if (match := re.fullmatch(r"Agri[_\-\s]?(\d{4})", str(column), flags=re.IGNORECASE))
+        }.items()
+    )
+    if not year_columns:
+        raise KeyError("Nessuna colonna annuale `Agri_YYYY` trovata nel CSV agriculture.")
+    chosen_year, chosen_column = resolve_annual_year_with_fallback([item[0] for item in year_columns], year)[0], None
+    for available_year, column_name in year_columns:
+        if available_year == chosen_year:
+            chosen_column = column_name
+            break
+    if chosen_column is None:
+        raise KeyError(f"Colonna agriculture non trovata per l'anno risolto {chosen_year}")
+    note = None if chosen_year == year else f"{chosen_column} usata come layer annuale/statico per {year}."
+    return chosen_column, note
+
+
 def scan_ndvi_month_coverage(path: Path) -> dict[str, Any]:
     ndvi_frame = pd.read_csv(path)
     date_column = next(
@@ -500,8 +554,14 @@ def scan_source_time_coverage(source_key: str, path: Path) -> dict[str, Any]:
 
 def months_missing_from_coverage(coverage: dict[str, Any], months: list[pd.Timestamp]) -> list[pd.Timestamp]:
     if "available_years" in coverage:
-        available_years = set(int(year) for year in coverage["available_years"])
-        return [month for month in months if int(month.year) not in available_years]
+        available_years = sorted({int(year) for year in coverage["available_years"]})
+        missing = []
+        for month in months:
+            try:
+                resolve_annual_year_with_fallback(available_years, int(month.year))
+            except KeyError:
+                missing.append(month)
+        return missing
     available_months = coverage.get("available_months", set())
     return [month for month in months if to_month_start(month) not in available_months]
 
@@ -993,10 +1053,15 @@ def build_vegetation_group_from_ndvi_csv(
 def build_forest_group(forest_path: Path, months: list[pd.Timestamp], latitudes: np.ndarray, longitudes: np.ndarray) -> dict[str, torch.Tensor]:
     """Costruisce il gruppo `forest` reale usando Europe_forest_data.csv."""
     forest_frame = prepare_yearly_grid_frame(pd.read_csv(forest_path), "forest")
-    forest_maps = [
-        yearly_column_to_grid(forest_frame, f"Forest_{pd.Timestamp(month).year}", latitudes, longitudes)
-        for month in months
-    ]
+    fallback_notes: set[str] = set()
+    forest_maps = []
+    for month in months:
+        column_name, fallback_note = find_forest_year_column(forest_frame.columns.tolist(), int(pd.Timestamp(month).year))
+        if fallback_note:
+            fallback_notes.add(fallback_note)
+        forest_maps.append(yearly_column_to_grid(forest_frame, column_name, latitudes, longitudes))
+    if fallback_notes:
+        print("  [info] " + " ".join(sorted(fallback_notes)), flush=True)
     return {"Forest": torch.stack(forest_maps)}
 
 
@@ -1023,10 +1088,15 @@ def build_agriculture_group(
                 f"Variabili disponibili: {available_variables}"
             )
 
-        maps = [
-            yearly_column_to_grid(variable_frame, f"Agri_{pd.Timestamp(month).year}", latitudes, longitudes)
-            for month in months
-        ]
+        fallback_notes: set[str] = set()
+        maps = []
+        for month in months:
+            column_name, fallback_note = find_agriculture_year_column(variable_frame.columns.tolist(), int(pd.Timestamp(month).year))
+            if fallback_note:
+                fallback_notes.add(f"{variable_name}: {fallback_note}")
+            maps.append(yearly_column_to_grid(variable_frame, column_name, latitudes, longitudes))
+        if fallback_notes:
+            print("  [info] " + " ".join(sorted(fallback_notes)), flush=True)
         group[variable_name] = torch.stack(maps)
 
     return group
