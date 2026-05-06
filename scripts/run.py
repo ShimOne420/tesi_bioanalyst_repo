@@ -437,6 +437,74 @@ def export_reliable_feature_plots(
     return outputs
 
 
+def percentage_error_metrics(predicted_values: np.ndarray, observed_values: np.ndarray) -> dict[str, Any]:
+    """Metriche percentuali robuste per celle finite."""
+    pred = np.asarray(predicted_values, dtype=np.float64)
+    obs = np.asarray(observed_values, dtype=np.float64)
+    mask = np.isfinite(pred) & np.isfinite(obs)
+    pred = pred[mask]
+    obs = obs[mask]
+    if pred.size == 0:
+        return {"metric_cell_count": 0, "wape_pct": None, "smaape_pct": None, "smape_pct": None}
+
+    abs_error = np.abs(pred - obs)
+    observed_abs_sum = float(np.sum(np.abs(obs)))
+    wape = None if observed_abs_sum <= 1e-12 else float(np.sum(abs_error) / observed_abs_sum * 100.0)
+
+    symmetric_denominator = np.abs(pred) + np.abs(obs)
+    symmetric_mask = symmetric_denominator > 1e-12
+    symmetric_values = np.zeros_like(abs_error, dtype=np.float64)
+    symmetric_values[symmetric_mask] = 200.0 * abs_error[symmetric_mask] / symmetric_denominator[symmetric_mask]
+    smaape = float(np.mean(symmetric_values)) if symmetric_values.size else None
+
+    return {
+        "metric_cell_count": int(pred.size),
+        "wape_pct": wape,
+        "smaape_pct": smaape,
+        "smape_pct": smaape,
+    }
+
+
+def add_cell_percentage_columns(frame: pd.DataFrame, value_label: str) -> pd.DataFrame:
+    """Aggiunge colonne percentuali cella-per-cella ai matrix."""
+    obs_col = f"observed_{value_label}"
+    pred_col = f"predicted_{value_label}"
+    abs_col = f"abs_error_{value_label}"
+    if obs_col not in frame or pred_col not in frame or abs_col not in frame:
+        return frame
+
+    predicted = pd.to_numeric(frame[pred_col], errors="coerce").astype(float)
+    observed = pd.to_numeric(frame[obs_col], errors="coerce").astype(float)
+    abs_error = pd.to_numeric(frame[abs_col], errors="coerce").astype(float)
+    finite_mask = np.isfinite(predicted) & np.isfinite(observed)
+
+    observed_abs = observed.abs()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ape = np.where(finite_mask & (observed_abs > 1e-12), abs_error / observed_abs * 100.0, np.nan)
+        symmetric_denominator = predicted.abs() + observed_abs
+        smaape = np.where(
+            finite_mask & (symmetric_denominator > 1e-12),
+            200.0 * abs_error / symmetric_denominator,
+            np.where(finite_mask & (abs_error <= 1e-12), 0.0, np.nan),
+        )
+
+    observed_abs_sum = float(observed_abs[finite_mask].sum())
+    if observed_abs_sum > 1e-12:
+        wape_contribution = np.where(finite_mask, abs_error / observed_abs_sum * 100.0, np.nan)
+        wape = float(np.nansum(wape_contribution))
+    else:
+        wape_contribution = np.full(len(frame), np.nan)
+        wape = np.nan
+
+    frame["valid_observation"] = finite_mask
+    frame["ape_pct"] = ape
+    frame["wape_pct"] = wape
+    frame["smaape_pct"] = smaape
+    frame["smape_pct"] = smaape
+    frame["wape_contribution_pct"] = wape_contribution
+    return frame
+
+
 def build_cell_frame(
     *,
     latitudes: np.ndarray,
@@ -582,12 +650,14 @@ def compute_summary(frame: pd.DataFrame, value_label: str, scope: str) -> dict[s
         mae = float(frame[abs_col].mean())
         rmse = float(math.sqrt(float((frame[diff_col] ** 2).mean())))
         bias = float(frame[diff_col].mean())
+        percent_metrics = percentage_error_metrics(frame[pred_col].to_numpy(), frame[obs_col].to_numpy())
         summary.update(
             {
                 "observed_mean": observed_mean,
                 "mae": mae,
                 "rmse": rmse,
                 "bias": bias,
+                **percent_metrics,
                 "error_pct_on_abs_observed_mean": None
                 if abs(observed_mean) < 1e-12
                 else float(mae / abs(observed_mean) * 100.0),
@@ -631,7 +701,9 @@ def export_feature_matrix_bundle(
         bounds=bounds,
         value_label=value_label,
     )
+    frame = add_cell_percentage_columns(frame, value_label)
     area_frame = frame[frame["inside_selected_area"]].copy()
+    area_frame = add_cell_percentage_columns(area_frame, value_label)
     summary_frame = pd.DataFrame.from_records(
         [
             compute_summary(frame, value_label, "full_grid"),
@@ -787,6 +859,7 @@ def export_species_matrix_workbook(
             bounds=manifest["bounds"],
             value_label=value_label,
         )
+        frame = add_cell_percentage_columns(frame, value_label)
         frame["species_id"] = species_id
         frame["unit"] = unit
         frame["forecast_month"] = manifest.get("forecast_month")
@@ -800,6 +873,7 @@ def export_species_matrix_workbook(
 
         full_metrics = compute_summary(frame, value_label, "full_grid")
         area_frame = frame[frame["inside_selected_area"]].copy()
+        area_frame = add_cell_percentage_columns(area_frame, value_label)
         area_metrics = compute_summary(area_frame, value_label, "selected_area")
         binary_full = compute_binary_summary(frame[f"predicted_{value_label}"].to_numpy(), frame[f"observed_{value_label}"].to_numpy())
         binary_area = compute_binary_summary(area_frame[f"predicted_{value_label}"].to_numpy(), area_frame[f"observed_{value_label}"].to_numpy())

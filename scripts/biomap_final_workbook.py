@@ -61,6 +61,9 @@ VARIABLE_SHEET_COLUMNS = [
     "predicted_max",
     "observed_min",
     "observed_max",
+    "wape_pct",
+    "smaape_pct",
+    "smape_pct",
     "relative_mae_pct",
     "source_report_year",
     "source_report_path",
@@ -393,6 +396,9 @@ def continuous_scores(pred: np.ndarray, obs: np.ndarray) -> dict[str, float | in
             "bias": math.nan,
             "correlation": math.nan,
             "relative_mae_pct": math.nan,
+            "wape_pct": math.nan,
+            "smaape_pct": math.nan,
+            "smape_pct": math.nan,
             "cell_count": 0,
         }
     diff = pred - obs
@@ -400,7 +406,14 @@ def continuous_scores(pred: np.ndarray, obs: np.ndarray) -> dict[str, float | in
     if pred.size > 1 and np.std(pred) > 0 and np.std(obs) > 0:
         corr = float(np.corrcoef(pred, obs)[0, 1])
     observed_abs_mean = abs(float(np.mean(obs)))
+    observed_abs_sum = float(np.sum(np.abs(obs)))
     mae = float(np.mean(np.abs(diff)))
+    abs_error = np.abs(diff)
+    symmetric_denominator = np.abs(pred) + np.abs(obs)
+    symmetric_values = np.zeros_like(abs_error, dtype=np.float64)
+    symmetric_mask = symmetric_denominator > 1e-12
+    symmetric_values[symmetric_mask] = 200.0 * abs_error[symmetric_mask] / symmetric_denominator[symmetric_mask]
+    smaape = float(np.mean(symmetric_values))
     return {
         "predicted_mean": float(np.mean(pred)),
         "observed_mean": float(np.mean(obs)),
@@ -409,6 +422,9 @@ def continuous_scores(pred: np.ndarray, obs: np.ndarray) -> dict[str, float | in
         "bias": float(np.mean(diff)),
         "correlation": corr,
         "relative_mae_pct": math.nan if observed_abs_mean <= 1e-12 else mae / observed_abs_mean * 100.0,
+        "wape_pct": math.nan if observed_abs_sum <= 1e-12 else float(np.sum(abs_error) / observed_abs_sum * 100.0),
+        "smaape_pct": smaape,
+        "smape_pct": smaape,
         "cell_count": int(pred.size),
     }
 
@@ -495,6 +511,9 @@ def compute_species_summary(runs: list[Path], current_batches: dict[Path, tuple[
                     "richness_rmse": richness["rmse"],
                     "richness_bias": richness["bias"],
                     "richness_correlation": richness["correlation"],
+                    "richness_wape_pct": richness["wape_pct"],
+                    "richness_smaape_pct": richness["smaape_pct"],
+                    "richness_smape_pct": richness["smape_pct"],
                     "richness_relative_mae_pct": richness["relative_mae_pct"],
                     "richness_cell_count": richness["cell_count"],
                     "biomap_readiness": "exploratory_not_final",
@@ -530,6 +549,9 @@ def build_dashboard(metrics: pd.DataFrame) -> pd.DataFrame:
                 "mean_corr": float(group_frame["correlation"].mean()),
                 "median_corr": float(group_frame["correlation"].median()),
                 "mean_r2_corr_squared": float(group_frame["r2_corr_squared"].mean()),
+                "mean_wape_pct": float(group_frame["wape_pct"].mean()),
+                "mean_smaape_pct": float(group_frame["smaape_pct"].mean()),
+                "mean_smape_pct": float(group_frame["smape_pct"].mean()),
                 "mean_relative_mae_pct": float(group_frame["relative_mae_pct"].mean()),
                 "ready_or_usable_months": int(len(ready_months)),
                 "readiness_ratio": math.nan if n_months == 0 else float(len(ready_months) / n_months),
@@ -566,6 +588,8 @@ def build_indicator_map(dashboard: pd.DataFrame) -> pd.DataFrame:
                 "n_months": row["n_months"],
                 "mean_mae": row["mean_mae"],
                 "mean_rmse": row["mean_rmse"],
+                "mean_wape_pct": row["mean_wape_pct"],
+                "mean_smaape_pct": row["mean_smaape_pct"],
                 "mean_bias": row["mean_bias"],
                 "mean_corr": row["mean_corr"],
                 "readiness_ratio": row["readiness_ratio"],
@@ -587,6 +611,8 @@ def metric_guide() -> pd.DataFrame:
             ("RMSE", "Radice della media degli errori quadratici.", "Variabili continue", "Pesa di piu gli errori grandi."),
             ("bias", "Media di (predetto - osservato).", "Variabili continue", "Positivo = sovrastima; negativo = sottostima."),
             ("correlation", "Correlazione di Pearson tra predetto e osservato.", "Pattern spaziali o strutturali", "Alta correlazione non implica valori assoluti corretti."),
+            ("WAPE", "100 * somma(|predetto - osservato|) / somma(|osservato|).", "Errore percentuale aggregato", "Non definito se la somma degli osservati assoluti e zero."),
+            ("SMAAPE", "Media di 200 * |predetto - osservato| / (|predetto| + |osservato|).", "Errore percentuale simmetrico", "Limitato a 0-200%, ma puo essere severo vicino a zero."),
             ("relative_mae_pct", "100 * MAE / abs(media osservata).", "Confronti percentuali tra variabili", "Instabile se la media osservata e vicina a zero."),
             ("tp", "True positives: presenze correttamente previste.", "Specie / binario", "Dipende dalla soglia scelta."),
             ("fp", "False positives: presenze previste ma non osservate.", "Specie / binario", "Troppi fp indicano sovrastima delle presenze."),

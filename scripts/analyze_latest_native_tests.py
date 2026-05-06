@@ -204,6 +204,9 @@ def compute_metrics(predicted: np.ndarray, observed: np.ndarray) -> dict[str, An
             "predicted_max": math.nan,
             "observed_min": math.nan,
             "observed_max": math.nan,
+            "wape_pct": math.nan,
+            "smaape_pct": math.nan,
+            "smape_pct": math.nan,
             "relative_mae_pct": math.nan,
         }
     diff = pred - obs
@@ -211,7 +214,14 @@ def compute_metrics(predicted: np.ndarray, observed: np.ndarray) -> dict[str, An
     if pred.size > 1 and float(np.std(pred)) > 0.0 and float(np.std(obs)) > 0.0:
         corr = float(np.corrcoef(pred, obs)[0, 1])
     observed_abs_mean = float(abs(np.mean(obs)))
+    observed_abs_sum = float(np.sum(np.abs(obs)))
     mae = float(np.mean(np.abs(diff)))
+    abs_error = np.abs(diff)
+    symmetric_denominator = np.abs(pred) + np.abs(obs)
+    symmetric_values = np.zeros_like(abs_error, dtype=np.float64)
+    symmetric_mask = symmetric_denominator > 1e-12
+    symmetric_values[symmetric_mask] = 200.0 * abs_error[symmetric_mask] / symmetric_denominator[symmetric_mask]
+    smaape = float(np.mean(symmetric_values))
     return {
         "cell_count": int(pred.size),
         "predicted_mean": float(np.mean(pred)),
@@ -224,6 +234,9 @@ def compute_metrics(predicted: np.ndarray, observed: np.ndarray) -> dict[str, An
         "predicted_max": float(np.max(pred)),
         "observed_min": float(np.min(obs)),
         "observed_max": float(np.max(obs)),
+        "wape_pct": math.nan if observed_abs_sum < 1e-12 else float(np.sum(abs_error) / observed_abs_sum * 100.0),
+        "smaape_pct": smaape,
+        "smape_pct": smaape,
         "relative_mae_pct": math.nan if observed_abs_mean < 1e-12 else float(mae / observed_abs_mean * 100.0),
     }
 
