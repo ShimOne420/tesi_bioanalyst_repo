@@ -23,6 +23,7 @@ import argparse
 import json
 import re
 import shutil
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -132,6 +133,13 @@ VALUE_COLUMN_CANDIDATES = (
     "coverage",
     "cover",
     "mean",
+)
+
+TIFF_MAGIC_PREFIXES = (
+    b"II*\x00",
+    b"MM\x00*",
+    b"II+\x00",
+    b"MM\x00+",
 )
 
 
@@ -294,6 +302,77 @@ def source_description(source: Any) -> str:
         parent = Path(source[0]).parent
         return f"{parent} ({len(source)} tile)"
     return str(source)
+
+
+def sniff_raw_container_kind(path: Path) -> str:
+    with path.open("rb") as handle:
+        header = handle.read(8)
+    if any(header.startswith(prefix) for prefix in TIFF_MAGIC_PREFIXES):
+        return "tiff"
+    if header.startswith(b"PK\x03\x04"):
+        return "zip"
+    return "unknown"
+
+
+def extracted_tile_dir(container_path: Path) -> Path:
+    return container_path.parent / "_extracted_tiles" / container_path.name
+
+
+def extract_raster_members(container_path: Path) -> list[Path]:
+    extract_dir = extracted_tile_dir(container_path)
+    if extract_dir.exists():
+        existing = sorted(
+            [
+                path
+                for path in extract_dir.rglob("*")
+                if path.is_file() and path.suffix.casefold() in {".tif", ".tiff"}
+            ],
+            key=lambda item: item.as_posix().casefold(),
+        )
+        if existing:
+            return existing
+
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(container_path) as archive:
+        raster_members = [
+            member
+            for member in archive.namelist()
+            if member.lower().endswith((".tif", ".tiff"))
+        ]
+        if not raster_members:
+            raise ValueError(f"{container_path.name}: archivio zip senza raster .tif/.tiff")
+        archive.extractall(extract_dir, members=raster_members)
+
+    extracted = sorted(
+        [
+            path
+            for path in extract_dir.rglob("*")
+            if path.is_file() and path.suffix.casefold() in {".tif", ".tiff"}
+        ],
+        key=lambda item: item.as_posix().casefold(),
+    )
+    if not extracted:
+        raise ValueError(f"{container_path.name}: estrazione completata ma nessun raster trovato")
+    return extracted
+
+
+def expand_raster_tile_paths(tile_paths: list[Path]) -> list[Path]:
+    expanded: list[Path] = []
+    for tile_path in tile_paths:
+        kind = sniff_raw_container_kind(tile_path)
+        if kind == "tiff":
+            expanded.append(tile_path)
+            continue
+        if kind == "zip":
+            expanded.extend(extract_raster_members(tile_path))
+            continue
+        raise ValueError(
+            f"{tile_path}: formato raw non riconosciuto. "
+            "Atteso GeoTIFF o ZIP contenente GeoTIFF."
+        )
+    if not expanded:
+        raise ValueError("Nessun raster utilizzabile trovato dopo l'espansione dei tile raw")
+    return expanded
 
 
 def read_table(path: Path) -> pd.DataFrame:
@@ -503,12 +582,13 @@ def build_base_summary_from_tiles(
     valid_range: tuple[float, float] | None = None,
 ) -> np.ndarray:
     require_rasterio()
+    raster_paths = expand_raster_tile_paths(tile_paths)
     destination = np.full((TARGET_HEIGHT, TARGET_WIDTH), np.nan, dtype=np.float32)
     destination_transform = target_grid_transform()
     destination_crs = "EPSG:4326"
 
-    for tile_path in tile_paths:
-        with rasterio.open(tile_path) as ds:
+    for tile_path in raster_paths:
+        with rasterio.open(tile_path, driver="GTiff") as ds:
             source = ds.read(1)
             if source.ndim != 2:
                 raise ValueError(f"{tile_path.name}: atteso raster 2D, trovato shape {source.shape}")
