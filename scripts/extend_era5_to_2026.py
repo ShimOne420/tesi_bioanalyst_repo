@@ -512,6 +512,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="all_monthly",
         help="Quale sorgente ERA5 scaricare.",
     )
+    parser.add_argument(
+        "--months",
+        type=int,
+        nargs="+",
+        default=list(range(1, 13)),
+        help="Mesi da scaricare, 1-12.",
+    )
     parser.add_argument("--biocube-dir", type=Path, default=None, help="Override di BIOCUBE_DIR.")
     parser.add_argument("--dry-run", action="store_true", help="Mostra cosa verrebbe fatto senza scaricare.")
     parser.add_argument("--tmp-dir", type=Path, default=None, help="Cartella temporanea per i download.")
@@ -520,14 +527,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    invalid_months = [month for month in args.months if month < 1 or month > 12]
+    if invalid_months:
+        raise SystemExit(f"Mesi non validi: {invalid_months}. Usa valori 1-12.")
     biocube_dir = resolve_biocube_dir(args.biocube_dir)
     tmp_dir = args.tmp_dir or (PROJECT_ROOT / "outputs" / "era5_downloads")
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    year_months = [(y, m) for y in args.years for m in range(1, 13)]
+    year_months = [(y, m) for y in args.years for m in sorted(args.months)]
     years_label = ", ".join(str(y) for y in sorted(args.years))
     print(f"BioCube dir: {biocube_dir}")
     print(f"Anni: {years_label} ({len(year_months)} mesi)")
+    print(f"Mesi: {', '.join(f'{month:02d}' for month in sorted(args.months))}")
     print(f"Target: {args.target}")
     print()
 
