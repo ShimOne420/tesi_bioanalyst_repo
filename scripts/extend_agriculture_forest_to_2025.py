@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Estende Agriculture/Forest BioCube fino al 2025 da file tabulari staged.
+"""Estende Agriculture/Forest BioCube fino al 2025 da file staged.
 
 Questo script non scarica da provider esterni. Si aspetta invece una cartella
-`source_root` con file ufficiali gia scaricati in formato tabellare
-(`.csv/.parquet/.xlsx`) e li converte nel formato BioCube gia usato dal loader:
+`source_root` con file ufficiali gia scaricati e li converte nel formato
+BioCube gia usato dal loader. Supporta due modalita:
+
+- file tabellari (`.csv/.parquet/.xlsx`)
+- tile raw CLMS gia scaricati via WEkEO HDA (`*_bulk/<query_dir>/<tile>`)
 
 - Agriculture/Europe_combined_agriculture_data.csv con colonne `Agri_YYYY`
 - Forest/Europe_forest_data.csv con colonne `Forest_YYYY`
@@ -24,23 +27,52 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from extend_era5_to_2026 import PROJECT_ROOT, resolve_biocube_dir
 from minimum_indicator_utils import snap_coordinates_to_grid
 
+try:
+    import rasterio
+    from rasterio.enums import Resampling
+    from rasterio.transform import from_origin
+    from rasterio.warp import reproject
+except ImportError:  # pragma: no cover - optional dependency used only for raw GeoTIFF tiles
+    rasterio = None
+    Resampling = None
+    from_origin = None
+    reproject = None
+
 
 DEFAULT_YEARS = [2022, 2023, 2024, 2025]
 OFFICIAL_CUTOFF_YEAR = 2023
 SUPPORTED_SUFFIXES = {".csv", ".parquet", ".pq", ".xlsx", ".xls", ".xlsm"}
+IGNORED_STAGE_SUFFIXES = {".json"}
 MODEL_BOUNDS = {
     "min_lat": 32.0,
     "max_lat": 72.0,
     "min_lon": -25.0,
     "max_lon": 45.0,
 }
+GRID_STEP_DEGREES = 0.25
+TARGET_HEIGHT = 160
+TARGET_WIDTH = 280
 MODEL_AGRICULTURE_VARS = ["Agriculture", "Arable", "Cropland"]
 MODEL_FOREST_VARS = ["Forest"]
+AGRICULTURE_ARABLE_CODES = {
+    1110, 1120, 1130, 1140, 1150,
+    1210, 1220, 1310, 1320,
+    1410, 1420, 1430, 1440,
+    3100,
+}
+AGRICULTURE_CROPLAND_CODES = {
+    1110, 1120, 1130, 1140, 1150,
+    1210, 1220, 1310, 1320,
+    1410, 1420, 1430, 1440,
+    2100, 2200, 2310, 2320,
+    3100, 3200,
+}
 
 TARGETS: dict[str, dict[str, Any]] = {
     "agriculture": {
@@ -160,6 +192,108 @@ def year_column_name(prefix: str, year: int) -> str:
 def sidecar_path(target_path: Path) -> Path:
     config = next(item for item in TARGETS.values() if item["relative_path"].name == target_path.name)
     return target_path.with_name(config["sidecar_name"])
+
+
+def require_rasterio() -> None:
+    if rasterio is None or Resampling is None or from_origin is None or reproject is None:
+        raise ImportError(
+            "La conversione dei tile raw CLMS richiede `rasterio`. "
+            "Installa nella venv con `pip install rasterio` e rilancia."
+        )
+
+
+def model_latitudes() -> np.ndarray:
+    return np.round(MODEL_BOUNDS["max_lat"] - np.arange(TARGET_HEIGHT, dtype=np.float32) * GRID_STEP_DEGREES, 2)
+
+
+def model_longitudes() -> np.ndarray:
+    return np.round(MODEL_BOUNDS["min_lon"] + np.arange(TARGET_WIDTH, dtype=np.float32) * GRID_STEP_DEGREES, 2)
+
+
+def target_grid_transform() -> Any:
+    require_rasterio()
+    return from_origin(
+        MODEL_BOUNDS["min_lon"] - GRID_STEP_DEGREES / 2.0,
+        MODEL_BOUNDS["max_lat"] + GRID_STEP_DEGREES / 2.0,
+        GRID_STEP_DEGREES,
+        GRID_STEP_DEGREES,
+    )
+
+
+def raw_query_dir_name(dataset_kind: str, year: int) -> str:
+    if dataset_kind == "forest":
+        return f"tcd_{year}_query"
+    if dataset_kind == "agriculture":
+        return f"crop_types_{year}_query"
+    raise ValueError(f"Dataset non supportato: {dataset_kind}")
+
+
+def count_downloaded_raw_tiles(query_dir: Path) -> int:
+    return len(
+        [
+            path
+            for path in query_dir.iterdir()
+            if path.is_file() and path.suffix.casefold() not in IGNORED_STAGE_SUFFIXES
+        ]
+    )
+
+
+def expected_feature_count(query_dir: Path) -> int | None:
+    for candidate_name in ("download_manifest.json", "search_response.json"):
+        candidate_path = query_dir / candidate_name
+        if not candidate_path.exists():
+            continue
+        payload = json.loads(candidate_path.read_text(encoding="utf-8"))
+        if candidate_name == "download_manifest.json":
+            if isinstance(payload, dict) and isinstance(payload.get("feature_count"), int):
+                return int(payload["feature_count"])
+        if candidate_name == "search_response.json":
+            features = payload.get("features") if isinstance(payload, dict) else None
+            if isinstance(features, list):
+                return len(features)
+    return None
+
+
+def collect_raw_query_tiles(query_dir: Path) -> list[Path]:
+    files = sorted(
+        [
+            path
+            for path in query_dir.iterdir()
+            if path.is_file() and path.suffix.casefold() not in IGNORED_STAGE_SUFFIXES
+        ],
+        key=lambda item: item.name.casefold(),
+    )
+    expected = expected_feature_count(query_dir)
+    actual = len(files)
+    if expected is not None and actual < expected:
+        raise RuntimeError(
+            f"{query_dir.name}: download raw incompleto ({actual}/{expected} tile presenti). "
+            "Completa il download prima di costruire il CSV BioCube definitivo per questo anno."
+        )
+    if not files:
+        raise FileNotFoundError(f"Nessun tile raw trovato in {query_dir}")
+    return files
+
+
+def find_raw_year_sources(dataset_kind: str, source_root: Path, years: list[int]) -> dict[int, list[Path]]:
+    bulk_dir = source_root / f"{dataset_kind}_bulk"
+    if not bulk_dir.exists():
+        return {}
+    resolved: dict[int, list[Path]] = {}
+    for year in years:
+        query_dir = bulk_dir / raw_query_dir_name(dataset_kind, year)
+        if query_dir.exists():
+            resolved[year] = collect_raw_query_tiles(query_dir)
+    return resolved
+
+
+def source_description(source: Any) -> str:
+    if isinstance(source, list):
+        if not source:
+            return "[]"
+        parent = Path(source[0]).parent
+        return f"{parent} ({len(source)} tile)"
+    return str(source)
 
 
 def read_table(path: Path) -> pd.DataFrame:
@@ -361,7 +495,135 @@ def load_forest_year_frame(path: Path, year: int) -> pd.DataFrame:
     return finalize_year_frame(normalized, dataset_kind="forest", year=year, source_label=source_label)
 
 
-def load_official_year_frame(dataset_kind: str, path: Path, year: int) -> pd.DataFrame:
+def build_base_summary_from_tiles(
+    tile_paths: list[Path],
+    *,
+    mask_builder,
+    resampling: Any,
+    valid_range: tuple[float, float] | None = None,
+) -> np.ndarray:
+    require_rasterio()
+    destination = np.full((TARGET_HEIGHT, TARGET_WIDTH), np.nan, dtype=np.float32)
+    destination_transform = target_grid_transform()
+    destination_crs = "EPSG:4326"
+
+    for tile_path in tile_paths:
+        with rasterio.open(tile_path) as ds:
+            source = ds.read(1)
+            if source.ndim != 2:
+                raise ValueError(f"{tile_path.name}: atteso raster 2D, trovato shape {source.shape}")
+
+            nodata = ds.nodata
+            source = source.astype(np.float32)
+            if valid_range is not None:
+                lower, upper = valid_range
+                invalid = (source < lower) | (source > upper)
+                source[invalid] = np.nan
+            if nodata is not None:
+                source[source == float(nodata)] = np.nan
+
+            source_data = mask_builder(source).astype(np.float32)
+            tile_destination = np.full((TARGET_HEIGHT, TARGET_WIDTH), np.nan, dtype=np.float32)
+            reproject(
+                source=source_data,
+                destination=tile_destination,
+                src_transform=ds.transform,
+                src_crs=ds.crs,
+                src_nodata=np.nan,
+                dst_transform=destination_transform,
+                dst_crs=destination_crs,
+                dst_nodata=np.nan,
+                resampling=resampling,
+            )
+            update_mask = np.isfinite(tile_destination)
+            destination[update_mask] = tile_destination[update_mask]
+
+    return destination
+
+
+def grid_array_to_frame(array: np.ndarray, *, year_col: str, variable: str | None = None) -> pd.DataFrame:
+    latitudes = model_latitudes()
+    longitudes = model_longitudes()
+    lat_grid = np.repeat(latitudes[:, None], TARGET_WIDTH, axis=1)
+    lon_grid = np.repeat(longitudes[None, :], TARGET_HEIGHT, axis=0)
+    mask = np.isfinite(array)
+    frame = pd.DataFrame(
+        {
+            "Latitude": lat_grid[mask].astype(np.float32),
+            "Longitude": lon_grid[mask].astype(np.float32),
+            year_col: array[mask].astype(np.float32),
+        }
+    )
+    if variable is not None:
+        frame["Variable"] = variable
+        return frame[["Latitude", "Longitude", "Variable", year_col]]
+    return frame[["Latitude", "Longitude", year_col]]
+
+
+def load_forest_year_frame_from_rasters(tile_paths: list[Path], year: int) -> pd.DataFrame:
+    year_col = year_column_name("Forest", year)
+    array = build_base_summary_from_tiles(
+        tile_paths,
+        mask_builder=lambda source: source,
+        resampling=Resampling.average,
+        valid_range=(0.0, 100.0),
+    )
+    return finalize_year_frame(
+        grid_array_to_frame(array, year_col=year_col),
+        dataset_kind="forest",
+        year=year,
+        source_label=f"forest raw tiles {year}",
+    )
+
+
+def load_agriculture_year_frame_from_rasters(tile_paths: list[Path], year: int) -> pd.DataFrame:
+    year_col = year_column_name("Agri", year)
+
+    def cropland_mask(source: np.ndarray) -> np.ndarray:
+        valid = np.isfinite(source) & np.isin(source.astype(np.int32), list(AGRICULTURE_CROPLAND_CODES))
+        return np.where(valid, 100.0, 0.0)
+
+    def arable_mask(source: np.ndarray) -> np.ndarray:
+        valid = np.isfinite(source) & np.isin(source.astype(np.int32), list(AGRICULTURE_ARABLE_CODES))
+        return np.where(valid, 100.0, 0.0)
+
+    cropland = build_base_summary_from_tiles(
+        tile_paths,
+        mask_builder=cropland_mask,
+        resampling=Resampling.average,
+    )
+    arable = build_base_summary_from_tiles(
+        tile_paths,
+        mask_builder=arable_mask,
+        resampling=Resampling.average,
+    )
+    # Il layer Crop Types copre la cropland mask ufficiale: nel v1 usiamo la stessa
+    # copertura come proxy coerente per `Agriculture`, mantenendo `Arable` come subset.
+    agriculture = cropland.copy()
+
+    combined = pd.concat(
+        [
+            grid_array_to_frame(agriculture, year_col=year_col, variable="Agriculture"),
+            grid_array_to_frame(arable, year_col=year_col, variable="Arable"),
+            grid_array_to_frame(cropland, year_col=year_col, variable="Cropland"),
+        ],
+        ignore_index=True,
+    )
+    return finalize_year_frame(
+        combined,
+        dataset_kind="agriculture",
+        year=year,
+        source_label=f"agriculture raw tiles {year}",
+    )
+
+
+def load_official_year_frame(dataset_kind: str, path: Path | list[Path], year: int) -> pd.DataFrame:
+    if isinstance(path, list):
+        if dataset_kind == "agriculture":
+            return load_agriculture_year_frame_from_rasters(path, year)
+        if dataset_kind == "forest":
+            return load_forest_year_frame_from_rasters(path, year)
+        raise ValueError(f"Dataset non supportato: {dataset_kind}")
     if dataset_kind == "agriculture":
         return load_agriculture_year_frame(path, year)
     if dataset_kind == "forest":
@@ -369,15 +631,17 @@ def load_official_year_frame(dataset_kind: str, path: Path, year: int) -> pd.Dat
     raise ValueError(f"Dataset non supportato: {dataset_kind}")
 
 
-def find_official_year_sources(dataset_kind: str, source_root: Path, years: list[int]) -> dict[int, Path]:
+def find_official_year_sources(dataset_kind: str, source_root: Path, years: list[int]) -> dict[int, Path | list[Path]]:
     candidates = find_stage_candidates(source_root, dataset_kind)
-    if not candidates:
+    raw_sources = find_raw_year_sources(dataset_kind, source_root, years)
+    if not candidates and not raw_sources:
         raise FileNotFoundError(
             f"Nessun file staged trovato per {dataset_kind} sotto {source_root}. "
-            "Attesi file .csv/.parquet/.xlsx in cartelle tipo `agriculture/` o `forest/`."
+            "Attesi file .csv/.parquet/.xlsx oppure tile raw in "
+            f"`{dataset_kind}_bulk/{raw_query_dir_name(dataset_kind, years[0])}`."
         )
 
-    resolved: dict[int, Path] = {}
+    resolved: dict[int, Path | list[Path]] = {}
     errors: dict[int, list[str]] = {year: [] for year in years}
     for year in years:
         ordered_candidates = sorted(candidates, key=lambda path: candidate_sort_key(path, dataset_kind, year))
@@ -388,6 +652,12 @@ def find_official_year_sources(dataset_kind: str, source_root: Path, years: list
                 break
             except Exception as exc:
                 errors[year].append(f"{candidate.name}: {exc}")
+        if year not in resolved and year in raw_sources:
+            try:
+                load_official_year_frame(dataset_kind, raw_sources[year], year)
+                resolved[year] = raw_sources[year]
+            except Exception as exc:
+                errors[year].append(f"{raw_query_dir_name(dataset_kind, year)}: {exc}")
         if year not in resolved:
             joined_errors = " | ".join(errors[year][:5])
             raise RuntimeError(
@@ -514,7 +784,7 @@ def extend_dataset(
             print(f"  [{year}] skip: colonna gia presente ({year_col})")
             continue
         source_path = official_sources[year]
-        print(f"  [{year}] official <- {source_path}")
+        print(f"  [{year}] official <- {source_description(source_path)}")
 
     carry_source_year = None
     combined_available_years = sorted(set(existing_years) | set(official_years))
@@ -523,7 +793,7 @@ def extend_dataset(
         if not official_basis_years:
             raise RuntimeError(f"{dataset_kind}: impossibile applicare carry-forward senza almeno un anno ufficiale disponibile")
         carry_source_year = max(official_basis_years)
-        carry_source_file = str(official_sources.get(carry_source_year, target_path))
+        carry_source_file = source_description(official_sources.get(carry_source_year, target_path))
         for year in carry_years:
             year_col = year_column_name(config["year_prefix"], year)
             if year_col in target_frame.columns and not overwrite_years:
@@ -555,11 +825,11 @@ def extend_dataset(
             year=year,
             mode="official",
             source_year=year,
-            source_file=str(source_path),
+            source_file=source_description(source_path),
         )
 
     if carry_source_year is not None:
-        carry_source_file = str(official_sources.get(carry_source_year, target_path))
+        carry_source_file = source_description(official_sources.get(carry_source_year, target_path))
         for year in carry_years:
             year_col = year_column_name(config["year_prefix"], year)
             if year_col in target_frame.columns and not overwrite_years:
@@ -593,10 +863,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--source-root",
         type=Path,
         required=True,
-        help="Cartella staging con file raw ufficiali tabulari (csv/parquet/xlsx).",
+        help="Cartella staging con file ufficiali tabellari o tile raw CLMS bulk.",
     )
     parser.add_argument("--biocube-dir", type=Path, default=None, help="Override di BIOCUBE_DIR.")
     parser.add_argument("--years", type=int, nargs="+", default=DEFAULT_YEARS, help="Anni da costruire.")
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        choices=sorted(TARGETS.keys()),
+        default=sorted(TARGETS.keys()),
+        help="Dataset da trasformare. Utile per lavorare su Agriculture e Forest separatamente.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Mostra i passaggi previsti senza scrivere.")
     parser.add_argument(
         "--overwrite-years",
@@ -623,22 +900,15 @@ def main() -> None:
     print(f"Anni richiesti: {', '.join(str(year) for year in years)}")
     print(f"Overwrite: {bool(args.overwrite_years)}")
 
-    extend_dataset(
-        dataset_kind="agriculture",
-        source_root=source_root,
-        biocube_dir=biocube_dir,
-        years=years,
-        dry_run=bool(args.dry_run),
-        overwrite_years=bool(args.overwrite_years),
-    )
-    extend_dataset(
-        dataset_kind="forest",
-        source_root=source_root,
-        biocube_dir=biocube_dir,
-        years=years,
-        dry_run=bool(args.dry_run),
-        overwrite_years=bool(args.overwrite_years),
-    )
+    for dataset_kind in args.datasets:
+        extend_dataset(
+            dataset_kind=dataset_kind,
+            source_root=source_root,
+            biocube_dir=biocube_dir,
+            years=years,
+            dry_run=bool(args.dry_run),
+            overwrite_years=bool(args.overwrite_years),
+        )
 
     print("\n=== Estensione Agriculture/Forest completata. ===")
     print("Verifica con:")

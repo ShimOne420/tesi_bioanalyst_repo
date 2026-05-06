@@ -228,6 +228,51 @@ def write_json(path: Path, payload: Any) -> None:
         json.dump(payload, handle, indent=2, ensure_ascii=False)
 
 
+def read_json_if_exists(path: Path) -> Any | None:
+    if not path.exists():
+        return None
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def normalize_download_entry(entry: dict[str, Any], destination_dir: Path) -> dict[str, Any]:
+    normalized = dict(entry)
+    saved_to = normalized.get("saved_to")
+    if saved_to:
+        saved_path = Path(str(saved_to))
+        if not saved_path.is_absolute():
+            saved_path = destination_dir / saved_path
+        normalized["saved_to"] = str(saved_path)
+    return normalized
+
+
+def load_existing_downloads(manifest_path: Path, destination_dir: Path) -> dict[str, dict[str, Any]]:
+    payload = read_json_if_exists(manifest_path)
+    if not isinstance(payload, dict):
+        return {}
+    downloads = payload.get("downloads")
+    if not isinstance(downloads, list):
+        return {}
+    existing: dict[str, dict[str, Any]] = {}
+    for raw_entry in downloads:
+        if not isinstance(raw_entry, dict):
+            continue
+        product_id = str(raw_entry.get("product_id", "")).strip()
+        if not product_id:
+            continue
+        existing[product_id] = normalize_download_entry(raw_entry, destination_dir)
+    return existing
+
+
+def entry_has_saved_file(entry: dict[str, Any]) -> bool:
+    saved_to = entry.get("saved_to")
+    return bool(saved_to) and Path(str(saved_to)).exists()
+
+
+def persist_query_summary(path: Path, summary: dict[str, Any]) -> None:
+    write_json(path, summary)
+
+
 def process_query_file(
     token: str,
     query_path: Path,
@@ -240,6 +285,8 @@ def process_query_file(
     query_name = query_path.stem
     destination_dir = output_root / query_name
     destination_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = destination_dir / "download_manifest.json"
+    existing_downloads = load_existing_downloads(manifest_path, destination_dir)
 
     search_response = search_products(token, query)
     write_json(destination_dir / "search_response.json", search_response)
@@ -274,30 +321,45 @@ def process_query_file(
             "preferred_name": preferred_name,
         }
 
+        existing_entry = existing_downloads.get(product_id)
+        if existing_entry and entry_has_saved_file(existing_entry):
+            print(f"[{query_name}] {index}/{len(features)} skip existing {preferred_name or product_id}")
+            summary["downloads"].append(existing_entry)
+            continue
+
         if dry_run:
             summary["downloads"].append(entry)
             continue
 
         print(f"[{query_name}] {index}/{len(features)} request download for {preferred_name or product_id}")
-        download_id = request_download(
-            token,
-            dataset_id=dataset_id,
-            product_id=product_id,
-            location=location,
-        )
-        entry["download_id"] = download_id
-        target_path = download_file(
-            token,
-            download_id,
-            destination_dir,
-            preferred_name=preferred_name,
-        )
-        entry["saved_to"] = str(target_path)
-        summary["downloads"].append(entry)
-        if pause_seconds > 0:
-            time.sleep(pause_seconds)
+        try:
+            download_id = request_download(
+                token,
+                dataset_id=dataset_id,
+                product_id=product_id,
+                location=location,
+            )
+            entry["download_id"] = download_id
+            target_path = download_file(
+                token,
+                download_id,
+                destination_dir,
+                preferred_name=preferred_name,
+            )
+            entry["saved_to"] = str(target_path)
+            summary["downloads"].append(entry)
+            persist_query_summary(manifest_path, summary)
+            if pause_seconds > 0:
+                time.sleep(pause_seconds)
+        except Exception as exc:
+            persist_query_summary(manifest_path, summary)
+            raise RuntimeError(
+                f"{query_name}: stopped after {len(summary['downloads'])}/{len(features)} downloads. "
+                f"You can safely rerun the same command later; existing files will be skipped. "
+                f"Original error: {exc}"
+            ) from exc
 
-    write_json(destination_dir / "download_manifest.json", summary)
+    persist_query_summary(manifest_path, summary)
     return summary
 
 
