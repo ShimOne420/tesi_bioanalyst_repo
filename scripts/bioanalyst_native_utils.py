@@ -75,7 +75,7 @@ class NativeOneStepResult:
     predicted_batch_original: Any
     observed_batch_original: Any | None
     checkpoint_diagnostics: dict[str, Any]
-    saved_windows: dict[str, Path]
+    saved_windows: dict[str, Any]
     forecast_month: pd.Timestamp
 
 
@@ -83,7 +83,7 @@ class NativeOneStepResult:
 class NativeRolloutResult:
     rollout_batches_original: list[Any]
     checkpoint_diagnostics: dict[str, Any]
-    saved_windows: dict[str, Path]
+    saved_windows: dict[str, Any]
     forecast_months: list[pd.Timestamp]
 
 
@@ -204,7 +204,7 @@ def prepare_native_saved_windows(
     source_paths: dict[str, Path],
     compare_month: pd.Timestamp | None,
     use_atmospheric_data: bool,
-) -> dict[str, Path]:
+) -> dict[str, Any]:
     """Costruisce i batch `.pt` raw nel formato ufficiale del modello."""
     input_months = [
         context.months_info["input_prev"],
@@ -247,7 +247,7 @@ def build_native_runtime(*, batch_dir: Path, checkpoint_path: Path, device: torc
     )
 
 
-def load_native_scaled_input(saved_windows: dict[str, Path], runtime: NativeRuntime):
+def load_native_scaled_input(saved_windows: dict[str, Any], runtime: NativeRuntime):
     """Carica il batch input tramite il dataloader ufficiale di BioAnalyst."""
     dataset = runtime.dataset_class(
         data_dir=str(saved_windows["input_window"].parent),
@@ -278,7 +278,7 @@ def run_native_one_step(
     *,
     context: NativeRunContext,
     runtime: NativeRuntime,
-    saved_windows: dict[str, Path],
+    saved_windows: dict[str, Any],
     use_amp_bf16: bool = False,
 ) -> NativeOneStepResult:
     """Esegue un forecast one-step e restituisce solo output nativi del modello."""
@@ -315,7 +315,7 @@ def run_native_rollout(
     *,
     context: NativeRunContext,
     runtime: NativeRuntime,
-    saved_windows: dict[str, Path],
+    saved_windows: dict[str, Any],
     steps: int,
     use_amp_bf16: bool = False,
 ) -> NativeRolloutResult:
@@ -367,6 +367,20 @@ def save_native_one_step_artifacts(
         observed_path = context.run_dir / "native_target_original.pt"
         torch.save(result.observed_batch_original, observed_path)
 
+    input_group_source_status = build_native_group_source_status(
+        use_atmospheric_data=bool(result.saved_windows.get("atmospheric_data_real", True)),
+        input_mode=context.input_mode,
+    )
+    target_input_mode = result.saved_windows.get("target_input_mode")
+    target_group_source_status = (
+        build_native_group_source_status(
+            use_atmospheric_data=bool(result.saved_windows.get("atmospheric_data_real", True)),
+            input_mode=str(target_input_mode),
+        )
+        if target_input_mode is not None
+        else None
+    )
+
     manifest = {
         "mode": "bioanalyst_native_one_step",
         "label": context.label,
@@ -383,13 +397,14 @@ def save_native_one_step_artifacts(
         "forecast_month": str(result.forecast_month.date()),
         "raw_batch_input": str(result.saved_windows["input_window"]),
         "raw_batch_target": str(result.saved_windows["target_window"]) if "target_window" in result.saved_windows else None,
+        "target_input_mode": target_input_mode,
+        "target_observed_uses_real_optional_layers": result.saved_windows.get("target_observed_uses_real_optional_layers"),
         "native_prediction_original": str(predicted_path),
         "native_target_original": str(observed_path) if observed_path else None,
         "checkpoint_diagnostics": runtime.checkpoint_diagnostics,
-        "group_source_status": build_native_group_source_status(
-            use_atmospheric_data=bool(result.saved_windows.get("atmospheric_data_real", True)),
-            input_mode=context.input_mode,
-        ),
+        "group_source_status": input_group_source_status,
+        "input_group_source_status": input_group_source_status,
+        "target_group_source_status": target_group_source_status,
     }
     write_json(context.run_dir / "forecast_native_manifest.json", manifest)
     return {

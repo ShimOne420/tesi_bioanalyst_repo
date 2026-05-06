@@ -19,6 +19,7 @@ import sys
 import unicodedata
 from copy import deepcopy
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -1031,7 +1032,7 @@ def save_window_batches(
     source_paths: dict[str, Path],
     use_atmospheric_data: bool = True,
     input_mode: str = "all",
-) -> dict[str, Path | bool]:
+) -> dict[str, Path | bool | str]:
     input_mode = normalize_input_mode(input_mode)
     output_dir.mkdir(parents=True, exist_ok=True)
     input_path = output_dir / "window_00000.pt"
@@ -1045,23 +1046,46 @@ def save_window_batches(
         input_path,
     )
 
-    results: dict[str, Path | bool] = {
+    results: dict[str, Path | bool | str] = {
         "input_window": input_path,
         "atmospheric_data_real": bool(use_atmospheric_data),
         "input_mode": input_mode,
     }
     if compare_month is not None:
         target_path = output_dir / "window_00001.pt"
-        torch.save(
-            build_raw_batch_for_months(
+        target_months = [input_months[-1], compare_month]
+        # Il target e' osservazione/validazione: anche quando il forecast gira in
+        # input-mode clean, proviamo a costruirlo con i layer reali disponibili.
+        target_input_mode = "all"
+        try:
+            target_batch = build_raw_batch_for_months(
                 source_paths,
-                [input_months[-1], compare_month],
+                target_months,
                 use_atmospheric_data=use_atmospheric_data,
-                input_mode=input_mode,
-            ),
+                input_mode=target_input_mode,
+            )
+        except Exception as exc:
+            if input_mode != "clean":
+                raise
+            target_input_mode = input_mode
+            print(
+                "  [warn] Target observed completo non costruibile; fallback a input-mode clean "
+                f"({exc}). NDVI/agriculture/forest observed saranno placeholder zero.",
+                flush=True,
+            )
+            target_batch = build_raw_batch_for_months(
+                source_paths,
+                target_months,
+                use_atmospheric_data=use_atmospheric_data,
+                input_mode=target_input_mode,
+            )
+        torch.save(
+            target_batch,
             target_path,
         )
         results["target_window"] = target_path
+        results["target_input_mode"] = target_input_mode
+        results["target_observed_uses_real_optional_layers"] = target_input_mode == "all"
     return results
 
 
