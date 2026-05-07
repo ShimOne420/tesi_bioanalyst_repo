@@ -14,6 +14,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -53,15 +54,15 @@ def slugify(value: str) -> str:
 
 
 # Convertiamo una stringa numerica in float o `None` per costruire il JSON di risposta.
-def parse_float(value: str) -> float | None:
-    if value == "":
+def parse_float(value: str | None) -> float | None:
+    if value in (None, ""):
         return None
     return float(value)
 
 
 # Convertiamo una stringa numerica in intero o `None`.
-def parse_int(value: str) -> int | None:
-    if value == "":
+def parse_int(value: str | None) -> int | None:
+    if value in (None, ""):
         return None
     return int(float(value))
 
@@ -119,6 +120,15 @@ def get_source_paths() -> dict[str, Path]:
             / "era5-climate-energy-moisture"
             / "era5-climate-energy-moisture-0.nc"
         ),
+        "edaphic": (
+            biocube_dir
+            / "Copernicus"
+            / "ERA5-monthly"
+            / "era5-edaphic"
+            / "era5-edaphic-0.nc"
+        ),
+        "ndvi": biocube_dir / "Land" / "Europe_ndvi_monthly_un_025.csv",
+        "agriculture": biocube_dir / "Agriculture" / "Europe_combined_agriculture_data.csv",
     }
 
 
@@ -184,7 +194,15 @@ def read_monthly_csv(path: Path) -> list[dict[str, Any]]:
                     "month": row["month"],
                     "temperature_mean_area_c": parse_float(row["temperature_mean_area_c"]),
                     "precipitation_mean_area_mm": parse_float(row["precipitation_mean_area_mm"]),
+                    "precipitation_mean_daily_area_mm": parse_float(
+                        row.get("precipitation_mean_daily_area_mm")
+                    ),
                     "precipitation_unit": row.get("precipitation_unit") or "mm/mese",
+                    "ndvi_mean_area": parse_float(row.get("ndvi_mean_area")),
+                    "swvl1_mean_area": parse_float(row.get("swvl1_mean_area")),
+                    "swvl2_mean_area": parse_float(row.get("swvl2_mean_area")),
+                    "cropland_mean_area": parse_float(row.get("cropland_mean_area")),
+                    "valid_cell_count": parse_int(row.get("valid_cell_count")),
                     "cell_count_land": parse_int(row["cell_count_land"]),
                     "cells_with_species_records": parse_int(row["cells_with_species_records"]),
                     "species_count_observed_area": parse_int(row["species_count_observed_area"]),
@@ -193,37 +211,18 @@ def read_monthly_csv(path: Path) -> list[dict[str, Any]]:
         return rows
 
 
-def build_feature_rows_from_monthly(monthly: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    feature_specs = [
-        ("t2m", "Temperatura 2m", "°C", "temperature_mean_area_c"),
-        ("tp", "Precipitazione totale", "mm/mese", "precipitation_mean_area_mm"),
-        ("NDVI", "NDVI", "native", None),
-        ("swvl1", "SWVL1", "native", None),
-        ("swvl2", "SWVL2", "native", None),
-        ("Cropland", "Cropland", "native", None),
+def resolve_python_executable() -> str:
+    candidates = [
+        PROJECT_ROOT / ".venv" / "Scripts" / "python.exe",
+        PROJECT_ROOT / ".venv-bioanalyst" / "Scripts" / "python.exe",
+        PROJECT_ROOT / ".venv" / "bin" / "python",
+        PROJECT_ROOT / ".venv-bioanalyst" / "bin" / "python",
     ]
-    rows: list[dict[str, Any]] = []
-    for monthly_row in monthly:
-        for feature_key, label, unit, observed_column in feature_specs:
-            observed_mean = monthly_row.get(observed_column) if observed_column else None
-            rows.append(
-                {
-                    "month": monthly_row["month"],
-                    "feature_key": feature_key,
-                    "label": label,
-                    "unit": unit,
-                    "predicted_mean": None,
-                    "observed_mean": observed_mean,
-                    "mae": None,
-                    "rmse": None,
-                    "bias": None,
-                    "wape_pct": None,
-                    "smape_pct": None,
-                    "smaape_pct": None,
-                    "valid_cell_count": monthly_row.get("cell_count_land") if observed_column else None,
-                }
-            )
-    return rows
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    return sys.executable
 
 
 # Deriviamo i file di output generati per una certa label in modo coerente tra API e UI.
@@ -245,7 +244,7 @@ def build_indicator_command(body: dict[str, Any]) -> tuple[list[str], str]:
     label_slug = slugify(label_value)
 
     cmd = [
-        str(PROJECT_ROOT / ".venv" / "bin" / "python"),
+        resolve_python_executable(),
         str(PROJECT_ROOT / "scripts" / "selected_area_indicators.py"),
         "--start",
         str(body.get("start")),
@@ -323,7 +322,17 @@ def run_indicator_job(body: dict[str, Any]) -> dict[str, Any]:
 
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     monthly = read_monthly_csv(csv_path)
-    features = build_feature_rows_from_monthly(monthly)
+    notes = [
+        note
+        for note in [
+            summary.get("species_note"),
+            summary.get("observational_schema"),
+            f"Conversione precipitazione: {summary.get('precipitation_conversion')}"
+            if summary.get("precipitation_conversion")
+            else None,
+        ]
+        if note
+    ]
 
     return {
         "status": "ok",
@@ -339,8 +348,7 @@ def run_indicator_job(body: dict[str, Any]) -> dict[str, Any]:
         "start": summary["start"],
         "end": summary["end"],
         "monthly": monthly,
-        "features": features,
-        "notes": [summary["species_note"]],
+        "notes": notes,
         "downloads": {
             "csvUrl": f"/api/download/{label_slug}/csv",
             "excelCsvUrl": f"/api/download/{label_slug}/excel_csv",

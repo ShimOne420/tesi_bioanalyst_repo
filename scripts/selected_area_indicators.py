@@ -16,11 +16,13 @@ Produce due livelli di output:
 from __future__ import annotations
 
 import argparse
+import calendar
 import math
 import os
 import re
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import xarray as xr
 from dotenv import load_dotenv
@@ -78,6 +80,255 @@ def require_path(env_name: str) -> Path:
 def slugify(value: str) -> str:
     normalized = re.sub(r"[^a-zA-Z0-9]+", "_", value.strip().lower())
     return normalized.strip("_") or "selected_area"
+
+
+def days_in_month(month_ts: pd.Timestamp) -> int:
+    return calendar.monthrange(month_ts.year, month_ts.month)[1]
+
+
+def weighted_mean(frame: pd.DataFrame, value_column: str, weight_column: str = "latitude_weight") -> float:
+    values = pd.to_numeric(frame[value_column], errors="coerce")
+    weights = pd.to_numeric(frame[weight_column], errors="coerce")
+    valid = values.notna() & weights.notna()
+    if not valid.any():
+        return float("nan")
+    return float((values[valid] * weights[valid]).sum() / weights[valid].sum())
+
+
+def optional_path(path: Path) -> Path | None:
+    return path if path.exists() else None
+
+
+def read_spatial_table(path: Path) -> pd.DataFrame:
+    suffix = path.suffix.casefold()
+    if suffix == ".csv":
+        return pd.read_csv(path)
+    if suffix in {".xlsx", ".xls"}:
+        workbook = pd.ExcelFile(path)
+        for sheet_name in workbook.sheet_names:
+            preview = pd.read_excel(workbook, sheet_name=sheet_name, nrows=0)
+            columns = {str(column).strip().casefold() for column in preview.columns}
+            if columns & {"latitude", "lat"} and columns & {"longitude", "lon", "long"}:
+                return pd.read_excel(workbook, sheet_name=sheet_name)
+        raise ValueError(f"Nessun foglio con coordinate trovato in {path}")
+    raise ValueError(f"Formato tabellare non supportato: {path.suffix}")
+
+
+def coordinate_columns(df: pd.DataFrame) -> tuple[str, str]:
+    columns = {str(column).strip().casefold(): column for column in df.columns}
+    lat_column = next((columns[name] for name in ("latitude", "lat") if name in columns), None)
+    lon_column = next((columns[name] for name in ("longitude", "lon", "long") if name in columns), None)
+    if lat_column is None or lon_column is None:
+        raise KeyError("La tabella non contiene colonne latitude/longitude.")
+    return str(lat_column), str(lon_column)
+
+
+def prepare_spatial_frame(df: pd.DataFrame) -> pd.DataFrame:
+    lat_column, lon_column = coordinate_columns(df)
+    frame = df.rename(columns={lat_column: "latitude", lon_column: "longitude"}).copy()
+    frame["latitude"] = snap_coordinates_to_grid(pd.to_numeric(frame["latitude"], errors="coerce"))
+    frame["longitude"] = snap_coordinates_to_grid(pd.to_numeric(frame["longitude"], errors="coerce"))
+    return frame.dropna(subset=["latitude", "longitude"])
+
+
+def month_number_from_value(value: object) -> int | None:
+    if pd.isna(value):
+        return None
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        month = int(value)
+        return month if 1 <= month <= 12 else None
+    text = str(value).strip()
+    if text.isdigit():
+        month = int(text)
+        return month if 1 <= month <= 12 else None
+    lookup = {
+        "jan": 1,
+        "january": 1,
+        "gen": 1,
+        "feb": 2,
+        "february": 2,
+        "mar": 3,
+        "march": 3,
+        "apr": 4,
+        "april": 4,
+        "may": 5,
+        "mag": 5,
+        "jun": 6,
+        "june": 6,
+        "jul": 7,
+        "july": 7,
+        "aug": 8,
+        "august": 8,
+        "sep": 9,
+        "sept": 9,
+        "september": 9,
+        "oct": 10,
+        "october": 10,
+        "nov": 11,
+        "november": 11,
+        "dec": 12,
+        "december": 12,
+    }
+    lowered = text.casefold()
+    return lookup.get(lowered) or lookup.get(lowered[:3])
+
+
+def value_column(df: pd.DataFrame, variable_name: str) -> str:
+    lower_to_column = {str(column).strip().casefold(): str(column) for column in df.columns}
+    for candidate in (variable_name, variable_name.lower(), "value", "Value"):
+        if candidate.casefold() in lower_to_column:
+            return lower_to_column[candidate.casefold()]
+    for column in df.columns:
+        if variable_name.casefold() in str(column).casefold():
+            return str(column)
+    raise KeyError(f"Colonna valore non trovata per {variable_name}.")
+
+
+def parse_month_from_column_name(column: str, variable_name: str) -> pd.Timestamp | None:
+    if variable_name.casefold() not in str(column).casefold():
+        return None
+    for pattern in (
+        r"(?P<month>\d{1,2})[\/_-](?P<year>\d{4})",
+        r"(?P<year>\d{4})[\/_-](?P<month>\d{1,2})",
+        r"(?P<year>\d{4})(?P<month>\d{2})",
+    ):
+        match = re.search(pattern, str(column))
+        if not match:
+            continue
+        month = int(match.group("month"))
+        year = int(match.group("year"))
+        if 1 <= month <= 12:
+            return pd.Timestamp(year=year, month=month, day=1)
+    return None
+
+
+def find_monthly_column(columns: list[str], variable_name: str, month: pd.Timestamp) -> str:
+    month = month.to_period("M").to_timestamp()
+    direct_candidates = [
+        f"{variable_name}_{month:%m/%Y}",
+        f"{variable_name}_{month.month}/{month.year}",
+        f"{variable_name}_{month:%Y_%m}",
+        f"{variable_name}_{month:%Y-%m}",
+        f"{variable_name}_{month:%Y%m}",
+    ]
+    columns_by_name = {str(column): str(column) for column in columns}
+    for candidate in direct_candidates:
+        if candidate in columns_by_name:
+            return columns_by_name[candidate]
+    for column in columns:
+        parsed = parse_month_from_column_name(str(column), variable_name)
+        if parsed is not None and parsed == month:
+            return str(column)
+    raise KeyError(f"Colonna mensile {variable_name} non trovata per {month:%Y-%m}.")
+
+
+def build_monthly_table_layer(
+    table: pd.DataFrame | None,
+    month: pd.Timestamp,
+    variable_name: str,
+    output_column: str,
+) -> pd.DataFrame:
+    if table is None:
+        return pd.DataFrame(columns=["latitude", "longitude", output_column])
+
+    frame = prepare_spatial_frame(table)
+    year_column = next((name for name in ("Year", "year", "YEAR", "Anno", "anno") if name in frame.columns), None)
+    month_column = next((name for name in ("Month", "month", "MONTH", "Mese", "mese") if name in frame.columns), None)
+    date_column = next(
+        (name for name in ("Timestamp", "timestamp", "Date", "date", "valid_time") if name in frame.columns),
+        None,
+    )
+
+    if year_column and month_column:
+        local = frame.copy()
+        local["_year"] = pd.to_numeric(local[year_column], errors="coerce")
+        local["_month"] = local[month_column].map(month_number_from_value)
+        local = local[(local["_year"] == month.year) & (local["_month"] == month.month)]
+        selected_value_column = value_column(local, variable_name)
+    elif date_column:
+        local = frame.copy()
+        local["_month_start"] = pd.to_datetime(local[date_column], errors="coerce").dt.to_period("M").dt.to_timestamp()
+        local = local[local["_month_start"] == month.to_period("M").to_timestamp()]
+        selected_value_column = value_column(local, variable_name)
+    else:
+        selected_value_column = find_monthly_column([str(column) for column in frame.columns], variable_name, month)
+        local = frame
+
+    if local.empty:
+        return pd.DataFrame(columns=["latitude", "longitude", output_column])
+
+    return (
+        local[["latitude", "longitude", selected_value_column]]
+        .rename(columns={selected_value_column: output_column})
+        .assign(**{output_column: lambda df: pd.to_numeric(df[output_column], errors="coerce")})
+        .dropna(subset=[output_column])
+        .groupby(["latitude", "longitude"], as_index=False)[output_column]
+        .mean()
+    )
+
+
+def find_yearly_column(columns: list[str], prefix: str, year: int) -> str:
+    candidates = [f"{prefix}_{year}", f"{prefix}{year}", str(year)]
+    for candidate in candidates:
+        if candidate in columns:
+            return candidate
+    year_columns = []
+    for column in columns:
+        match = re.search(r"(?P<year>\d{4})", str(column))
+        if match:
+            year_columns.append((int(match.group("year")), str(column)))
+    past_or_current = [(column_year, column) for column_year, column in year_columns if column_year <= year]
+    if past_or_current:
+        return max(past_or_current, key=lambda item: item[0])[1]
+    raise KeyError(f"Colonna annuale {prefix}_{year} non trovata.")
+
+
+def build_annual_table_layer(
+    table: pd.DataFrame | None,
+    month: pd.Timestamp,
+    variable_name: str,
+    output_column: str,
+) -> pd.DataFrame:
+    if table is None:
+        return pd.DataFrame(columns=["latitude", "longitude", output_column])
+
+    frame = prepare_spatial_frame(table)
+    if "Variable" in frame.columns:
+        frame = frame[frame["Variable"].astype(str).str.casefold() == variable_name.casefold()]
+    if frame.empty:
+        return pd.DataFrame(columns=["latitude", "longitude", output_column])
+
+    selected_value_column = find_yearly_column([str(column) for column in frame.columns], "Agri", month.year)
+    return (
+        frame[["latitude", "longitude", selected_value_column]]
+        .rename(columns={selected_value_column: output_column})
+        .assign(**{output_column: lambda df: pd.to_numeric(df[output_column], errors="coerce")})
+        .dropna(subset=[output_column])
+        .groupby(["latitude", "longitude"], as_index=False)[output_column]
+        .mean()
+    )
+
+
+def merge_layer(frame: pd.DataFrame, layer: pd.DataFrame, value_column_name: str) -> pd.DataFrame:
+    if layer.empty:
+        frame[value_column_name] = np.nan
+        return frame
+    return frame.merge(layer, on=["latitude", "longitude"], how="left")
+
+
+def precipitation_layers(
+    ds_prec: xr.Dataset,
+    land_mask: xr.DataArray,
+    time_index: int,
+    month_ts: pd.Timestamp,
+) -> tuple[xr.DataArray, xr.DataArray, str]:
+    month_days = days_in_month(month_ts)
+    if "avg_tprate" in ds_prec.data_vars:
+        daily_mm = ds_prec["avg_tprate"].isel(valid_time=time_index).where(land_mask) * 86400.0
+        return daily_mm, daily_mm * month_days, "avg_tprate kg m^-2 s^-1 -> mm/mese"
+
+    monthly_mm = ds_prec["tp"].isel(valid_time=time_index).where(land_mask) * 1000.0
+    return monthly_mm / month_days, monthly_mm, "tp raw_m * 1000 -> mm/mese"
 
 
 # Definiamo gli argomenti CLI per selezionare area, periodo e formato di output.
@@ -194,6 +445,15 @@ def resolve_source_paths(biocube_dir: Path) -> dict[str, Path]:
             / "era5-climate-energy-moisture"
             / "era5-climate-energy-moisture-0.nc"
         ),
+        "edaphic": (
+            biocube_dir
+            / "Copernicus"
+            / "ERA5-monthly"
+            / "era5-edaphic"
+            / "era5-edaphic-0.nc"
+        ),
+        "ndvi": biocube_dir / "Land" / "Europe_ndvi_monthly_un_025.csv",
+        "agriculture": biocube_dir / "Agriculture" / "Europe_combined_agriculture_data.csv",
     }
 
 
@@ -285,24 +545,59 @@ def compute_species_area_monthly(
 def build_selected_cell_month_frame(
     ds_temp: xr.Dataset,
     ds_prec: xr.Dataset,
+    ds_edaphic: xr.Dataset,
     land_mask: xr.DataArray,
+    ndvi_table: pd.DataFrame | None,
+    agriculture_table: pd.DataFrame | None,
     species_lookup: dict[str, pd.DataFrame],
     time_index: int,
 ) -> pd.DataFrame:
     month_ts = pd.to_datetime(ds_temp["valid_time"].values[time_index]).to_period("M").to_timestamp()
     month_key = str(month_ts.date())
+    precipitation_daily_mm, precipitation_monthly_mm, _ = precipitation_layers(
+        ds_prec=ds_prec,
+        land_mask=land_mask,
+        time_index=time_index,
+        month_ts=month_ts,
+    )
 
     month_ds = xr.Dataset(
         {
             "temperature_mean_c": ds_temp["t2m"].isel(valid_time=time_index).where(land_mask) - 273.15,
-            "precipitation_mean_mm": ds_prec["tp"].isel(valid_time=time_index).where(land_mask) * 1000.0,
+            "precipitation_mean_daily_mm": precipitation_daily_mm,
+            "precipitation_mean_mm": precipitation_monthly_mm,
+            "swvl1_mean": ds_edaphic["swvl1"].isel(valid_time=time_index).where(land_mask),
+            "swvl2_mean": ds_edaphic["swvl2"].isel(valid_time=time_index).where(land_mask),
         }
     )
     frame = month_ds.to_dataframe().reset_index()
-    frame = frame.dropna(subset=["temperature_mean_c", "precipitation_mean_mm"], how="all")
-    frame = frame[["latitude", "longitude", "temperature_mean_c", "precipitation_mean_mm"]].copy()
+    frame = frame.dropna(
+        subset=["temperature_mean_c", "precipitation_mean_mm", "swvl1_mean", "swvl2_mean"],
+        how="all",
+    )
+    frame = frame[
+        [
+            "latitude",
+            "longitude",
+            "temperature_mean_c",
+            "precipitation_mean_daily_mm",
+            "precipitation_mean_mm",
+            "swvl1_mean",
+            "swvl2_mean",
+        ]
+    ].copy()
     frame["latitude"] = frame["latitude"].round(2)
     frame["longitude"] = frame["longitude"].round(2)
+    frame = merge_layer(
+        frame,
+        build_monthly_table_layer(ndvi_table, month_ts, "NDVI", "ndvi_mean"),
+        "ndvi_mean",
+    )
+    frame = merge_layer(
+        frame,
+        build_annual_table_layer(agriculture_table, month_ts, "Cropland", "cropland_mean"),
+        "cropland_mean",
+    )
     frame["month"] = month_ts
     frame["cell_id"] = frame["latitude"].map(lambda v: f"{v:.2f}") + "_" + frame["longitude"].map(
         lambda v: f"{v:.2f}"
@@ -325,7 +620,12 @@ def build_selected_cell_month_frame(
             "latitude_weight",
             "species_count_observed_cell",
             "temperature_mean_c",
+            "precipitation_mean_daily_mm",
             "precipitation_mean_mm",
+            "ndvi_mean",
+            "swvl1_mean",
+            "swvl2_mean",
+            "cropland_mean",
         ]
     ]
 
@@ -335,18 +635,29 @@ def compute_area_climate_monthly(cell_df: pd.DataFrame) -> pd.DataFrame:
     records: list[dict[str, float | int | str]] = []
 
     for month, frame in cell_df.groupby("month", sort=True):
-        weights = frame["latitude_weight"]
         records.append(
             {
                 "month": str(pd.Timestamp(month).date()),
-                "temperature_mean_area_c": float(
-                    (frame["temperature_mean_c"] * weights).sum() / weights.sum()
-                ),
-                "precipitation_mean_area_mm": float(
-                    (frame["precipitation_mean_mm"] * weights).sum() / weights.sum()
-                ),
+                "temperature_mean_area_c": weighted_mean(frame, "temperature_mean_c"),
+                "precipitation_mean_area_mm": weighted_mean(frame, "precipitation_mean_mm"),
+                "precipitation_mean_daily_area_mm": weighted_mean(frame, "precipitation_mean_daily_mm"),
                 "precipitation_unit": "mm/mese",
-                "precipitation_conversion": "raw_m * 1000",
+                "ndvi_mean_area": weighted_mean(frame, "ndvi_mean"),
+                "swvl1_mean_area": weighted_mean(frame, "swvl1_mean"),
+                "swvl2_mean_area": weighted_mean(frame, "swvl2_mean"),
+                "cropland_mean_area": weighted_mean(frame, "cropland_mean"),
+                "valid_cell_count": int(
+                    frame[
+                        [
+                            "temperature_mean_c",
+                            "precipitation_mean_mm",
+                            "ndvi_mean",
+                            "swvl1_mean",
+                            "swvl2_mean",
+                            "cropland_mean",
+                        ]
+                    ].notna().any(axis=1).sum()
+                ),
                 "cell_count_land": int(len(frame)),
                 "cells_with_species_records": int(frame["species_count_observed_cell"].notna().sum()),
             }
@@ -362,7 +673,7 @@ def load_climate_datasets(
     start: str,
     end: str,
     max_steps: int | None,
-) -> tuple[xr.Dataset, xr.Dataset, xr.DataArray]:
+) -> tuple[xr.Dataset, xr.Dataset, xr.Dataset, xr.DataArray]:
     # Apriamo, normalizziamo, filtriamo nel tempo e ritagliamo il dataset temperatura.
     ds_temp = subset_bbox(
         filter_dataset_month_range(
@@ -385,11 +696,21 @@ def load_climate_datasets(
         bounds=bounds,
     )
 
+    ds_edaphic = subset_bbox(
+        filter_dataset_month_range(
+            subset_europe(xr.open_dataset(source_paths["edaphic"])),
+            start=start,
+            end=end,
+            max_steps=max_steps,
+        ),
+        bounds=bounds,
+    )
+
     if ds_temp.sizes.get("latitude", 0) == 0 or ds_temp.sizes.get("longitude", 0) == 0:
         raise SystemExit("Il bounding box selezionato non interseca celle climatiche valide in Europa.")
 
     land_mask = build_land_mask(ds_temp)
-    return ds_temp, ds_prec, land_mask
+    return ds_temp, ds_prec, ds_edaphic, land_mask
 
 
 # Eseguiamo l'intera pipeline: selezione area, costruzione celle, aggregazione e salvataggio output.
@@ -427,12 +748,28 @@ def main() -> None:
         max_steps=args.max_steps,
     )
 
-    ds_temp, ds_prec, land_mask = load_climate_datasets(
+    ndvi_table = (
+        read_spatial_table(source_paths["ndvi"])
+        if optional_path(source_paths["ndvi"]) is not None
+        else None
+    )
+    agriculture_table = (
+        read_spatial_table(source_paths["agriculture"])
+        if optional_path(source_paths["agriculture"]) is not None
+        else None
+    )
+
+    ds_temp, ds_prec, ds_edaphic, land_mask = load_climate_datasets(
         source_paths=source_paths,
         bounds=bounds,
         start=args.start,
         end=args.end,
         max_steps=args.max_steps,
+    )
+    precipitation_conversion = (
+        "avg_tprate kg m^-2 s^-1 -> mm/mese"
+        if "avg_tprate" in ds_prec.data_vars
+        else "tp raw_m * 1000 -> mm/mese"
     )
 
     try:
@@ -442,7 +779,10 @@ def main() -> None:
                 build_selected_cell_month_frame(
                     ds_temp=ds_temp,
                     ds_prec=ds_prec,
+                    ds_edaphic=ds_edaphic,
                     land_mask=land_mask,
+                    ndvi_table=ndvi_table,
+                    agriculture_table=agriculture_table,
                     species_lookup=species_lookup,
                     time_index=idx,
                 )
@@ -450,6 +790,7 @@ def main() -> None:
     finally:
         ds_temp.close()
         ds_prec.close()
+        ds_edaphic.close()
 
     if not cell_frames:
         raise SystemExit("Nessun timestep disponibile nel periodo selezionato.")
@@ -484,8 +825,15 @@ def main() -> None:
         "species_semantics_area": "species_count_observed_area = numero di specie osservate nell'area selezionata per mese",
         "species_semantics_cells": "species_count_observed_cell = numero di specie osservate nella singola cella e mese",
         "species_note": "NaN sulle specie significa che nel dataset non risultano osservazioni per quella cella o area e in quel mese",
+        "precipitation_conversion": precipitation_conversion,
+        "observational_schema": (
+            "monthly contiene solo valori osservativi reali: temperatura, precipitazione, NDVI, SWVL1, SWVL2, Cropland e celle valide"
+        ),
         "temperature_source": str(source_paths["temperature"]),
         "precipitation_source": str(source_paths["precipitation"]),
+        "edaphic_source": str(source_paths["edaphic"]),
+        "ndvi_source": str(source_paths["ndvi"]) if optional_path(source_paths["ndvi"]) else None,
+        "agriculture_source": str(source_paths["agriculture"]) if optional_path(source_paths["agriculture"]) else None,
         "species_source": str(source_paths["species"]),
     }
 

@@ -19,7 +19,13 @@ export type IndicatorRow = {
   month: string;
   temperature_mean_area_c: number | null;
   precipitation_mean_area_mm: number | null;
+  precipitation_mean_daily_area_mm?: number | null;
   precipitation_unit?: string | null;
+  ndvi_mean_area: number | null;
+  swvl1_mean_area: number | null;
+  swvl2_mean_area: number | null;
+  cropland_mean_area: number | null;
+  valid_cell_count: number | null;
   cell_count_land: number | null;
   cells_with_species_records: number | null;
   species_count_observed_area: number | null;
@@ -56,6 +62,7 @@ export type IndicatorResponse = {
   start: string;
   end: string;
   monthly: IndicatorRow[];
+  // Reserved for a future forecast/backtest view; the main dashboard ignores it.
   features?: FeatureMetricRow[];
   notes: string[];
   downloads?: DownloadLinks;

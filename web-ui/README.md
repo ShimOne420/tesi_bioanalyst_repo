@@ -11,9 +11,13 @@ L'app permette di:
 - definire un periodo mensile
 - disegnare manualmente un rettangolo sulla mappa d'Europa
 - inviare la selezione a un backend
-- visualizzare in output i tre indicatori minimi per mese
+- visualizzare in output gli indicatori osservativi BIOMAP per mese
 - esportare la tabella visualizzata in `CSV` o `Excel`
 - scaricare l'output mensile in `CSV`, `CSV per Excel` o `XLSX`
+
+La vista principale e descritta nel dettaglio in:
+
+- [`docs/README_FRONTEND_OSSERVATIVO.md`](../docs/README_FRONTEND_OSSERVATIVO.md)
 
 ## Architettura
 
@@ -71,7 +75,10 @@ Quando backend e frontend sono entrambi aggiornati:
 
 - il selettore periodo usa automaticamente il range reale del dataset: `2000-01 -> 2020-12`
 - puoi scegliere qualunque intervallo mensile dentro quel range
-- dopo il calcolo compaiono tre pulsanti download:
+- la tabella mostra una riga per mese con temperatura, precipitazione, NDVI, SWVL1, SWVL2, Cropland e celle valide
+- dopo il calcolo compaiono i pulsanti di esportazione della tabella e, se il backend locale e attivo, tre pulsanti download:
+  - `Esporta CSV`
+  - `Esporta Excel`
   - `Scarica CSV`
   - `Scarica CSV per Excel`
   - `Scarica XLSX`

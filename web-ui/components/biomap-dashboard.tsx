@@ -7,7 +7,6 @@ import { useEffect, useMemo, useState } from "react";
 import { buildBoundsFromCity, CITY_OPTIONS } from "../lib/cities";
 import type {
   DatasetMetadata,
-  FeatureMetricRow,
   IndicatorResponse,
   IndicatorRow,
   SelectionBounds
@@ -48,31 +47,16 @@ function formatMonthLabel(value: string) {
   }).format(date);
 }
 
-function formatNumber(value: number | null, unit: string) {
+function formatNumber(value: number | null, unit: string, decimals = 2) {
   if (value === null || Number.isNaN(value)) {
     return "n.d.";
   }
 
-  return `${value.toFixed(2)} ${unit}`;
+  const formatted = value.toFixed(decimals);
+  return unit ? `${formatted} ${unit}` : formatted;
 }
 
-function formatPlainNumber(value: number | null, decimals = 2) {
-  if (value === null || Number.isNaN(value)) {
-    return "n.d.";
-  }
-
-  return value.toFixed(decimals);
-}
-
-function formatPercent(value: number | null) {
-  if (value === null || Number.isNaN(value)) {
-    return "n.d.";
-  }
-
-  return `${value.toFixed(2)}%`;
-}
-
-const MONTHLY_TABLE_COLUMNS: Array<{
+const TABLE_COLUMNS: Array<{
   label: string;
   value: (row: IndicatorRow) => string | number | null;
   display: (row: IndicatorRow) => string | number;
@@ -88,91 +72,34 @@ const MONTHLY_TABLE_COLUMNS: Array<{
     display: (row) => formatNumber(row.temperature_mean_area_c, "°C")
   },
   {
-    label: "Precipitazioni medie",
+    label: "Precipitazione mensile",
     value: (row) => row.precipitation_mean_area_mm,
     display: (row) => formatNumber(row.precipitation_mean_area_mm, row.precipitation_unit ?? "mm/mese")
   },
   {
-    label: "Celle di terra",
-    value: (row) => row.cell_count_land,
-    display: (row) => row.cell_count_land ?? "n.d."
+    label: "NDVI",
+    value: (row) => row.ndvi_mean_area,
+    display: (row) => formatNumber(row.ndvi_mean_area, "", 3)
   },
   {
-    label: "Celle con specie",
-    value: (row) => row.cells_with_species_records,
-    display: (row) => row.cells_with_species_records ?? "n.d."
+    label: "SWVL1",
+    value: (row) => row.swvl1_mean_area,
+    display: (row) => formatNumber(row.swvl1_mean_area, "", 3)
   },
   {
-    label: "Specie osservate",
-    value: (row) => row.species_count_observed_area,
-    display: (row) => row.species_count_observed_area ?? "n.d."
-  }
-];
-
-const FEATURE_TABLE_COLUMNS: Array<{
-  label: string;
-  value: (row: FeatureMetricRow) => string | number | null;
-  display: (row: FeatureMetricRow) => string | number;
-}> = [
-  {
-    label: "Mese",
-    value: (row) => row.month.slice(0, 7),
-    display: (row) => row.month.slice(0, 7)
+    label: "SWVL2",
+    value: (row) => row.swvl2_mean_area,
+    display: (row) => formatNumber(row.swvl2_mean_area, "", 3)
   },
   {
-    label: "Feature",
-    value: (row) => row.feature_key,
-    display: (row) => row.label
-  },
-  {
-    label: "Unita",
-    value: (row) => row.unit,
-    display: (row) => row.unit
-  },
-  {
-    label: "Predicted mean",
-    value: (row) => row.predicted_mean,
-    display: (row) => formatPlainNumber(row.predicted_mean)
-  },
-  {
-    label: "Observed mean",
-    value: (row) => row.observed_mean,
-    display: (row) => formatPlainNumber(row.observed_mean)
-  },
-  {
-    label: "MAE",
-    value: (row) => row.mae,
-    display: (row) => formatPlainNumber(row.mae)
-  },
-  {
-    label: "RMSE",
-    value: (row) => row.rmse,
-    display: (row) => formatPlainNumber(row.rmse)
-  },
-  {
-    label: "Bias",
-    value: (row) => row.bias,
-    display: (row) => formatPlainNumber(row.bias)
-  },
-  {
-    label: "WAPE",
-    value: (row) => row.wape_pct,
-    display: (row) => formatPercent(row.wape_pct)
-  },
-  {
-    label: "sMAPE",
-    value: (row) => row.smape_pct,
-    display: (row) => formatPercent(row.smape_pct)
-  },
-  {
-    label: "SMAAPE",
-    value: (row) => row.smaape_pct,
-    display: (row) => formatPercent(row.smaape_pct)
+    label: "Cropland",
+    value: (row) => row.cropland_mean_area,
+    display: (row) => formatNumber(row.cropland_mean_area, "", 3)
   },
   {
     label: "Celle valide",
-    value: (row) => row.valid_cell_count,
-    display: (row) => row.valid_cell_count ?? "n.d."
+    value: (row) => row.valid_cell_count ?? row.cell_count_land,
+    display: (row) => row.valid_cell_count ?? row.cell_count_land ?? "n.d."
   }
 ];
 
@@ -246,19 +173,11 @@ function exportRowsAsExcel<T>(
 }
 
 function exportTableAsCsv(result: IndicatorResponse) {
-  if (result.features?.length) {
-    exportRowsAsCsv(result, result.features, FEATURE_TABLE_COLUMNS);
-    return;
-  }
-  exportRowsAsCsv(result, result.monthly, MONTHLY_TABLE_COLUMNS);
+  exportRowsAsCsv(result, result.monthly, TABLE_COLUMNS);
 }
 
 function exportTableAsExcel(result: IndicatorResponse) {
-  if (result.features?.length) {
-    exportRowsAsExcel(result, result.features, FEATURE_TABLE_COLUMNS);
-    return;
-  }
-  exportRowsAsExcel(result, result.monthly, MONTHLY_TABLE_COLUMNS);
+  exportRowsAsExcel(result, result.monthly, TABLE_COLUMNS);
 }
 
 export function BiomapDashboard() {
@@ -435,8 +354,6 @@ export function BiomapDashboard() {
   }
 
   const latestRow = result?.monthly.at(-1) ?? null;
-  const featureRows = result?.features ?? [];
-  const hasFeatureRows = featureRows.length > 0;
 
   return (
     <main className="page-shell">
@@ -446,8 +363,7 @@ export function BiomapDashboard() {
         <p>
           Questa interfaccia e pensata per il progetto BioMap: puoi scegliere una citta
           europea oppure disegnare manualmente un rettangolo sulla mappa, definire il
-          periodo e ottenere in output specie osservate, temperatura media e
-          precipitazioni medie.
+          periodo e ottenere in output gli indicatori osservativi reali dell&apos;area.
         </p>
       </section>
 
@@ -660,11 +576,10 @@ export function BiomapDashboard() {
 
             <div className="panel">
               <div className="panel-inner">
-                <h2 className="section-title">{hasFeatureRows ? "Feature BIOMAP" : "Output mensile"}</h2>
+                <h2 className="section-title">Output osservativo mensile</h2>
                 <p className="section-copy">
-                  Tabella dell&apos;area selezionata. Se l&apos;app e collegata al
-                  backend locale o a un backend remoto, qui vedrai i dati reali; altrimenti
-                  viene mostrata una demo trasparente.
+                  Tabella dell&apos;area selezionata con variabili osservate in colonna. La
+                  sezione forecast/backtest resta separata e non entra in questa vista.
                 </p>
 
                 <p className="small-note">
@@ -695,45 +610,24 @@ export function BiomapDashboard() {
                 </div>
 
                 <div className="table-shell">
-                  {hasFeatureRows ? (
-                    <table>
-                      <thead>
-                        <tr>
-                          {FEATURE_TABLE_COLUMNS.map((column) => (
-                            <th key={column.label}>{column.label}</th>
+                  <table>
+                    <thead>
+                      <tr>
+                        {TABLE_COLUMNS.map((column) => (
+                          <th key={column.label}>{column.label}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.monthly.map((row) => (
+                        <tr key={row.month}>
+                          {TABLE_COLUMNS.map((column) => (
+                            <td key={column.label}>{column.display(row)}</td>
                           ))}
                         </tr>
-                      </thead>
-                      <tbody>
-                        {featureRows.map((row) => (
-                          <tr key={`${row.month}-${row.feature_key}`}>
-                            {FEATURE_TABLE_COLUMNS.map((column) => (
-                              <td key={column.label}>{column.display(row)}</td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  ) : (
-                    <table>
-                      <thead>
-                        <tr>
-                          {MONTHLY_TABLE_COLUMNS.map((column) => (
-                            <th key={column.label}>{column.label}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {result.monthly.map((row) => (
-                          <tr key={row.month}>
-                            {MONTHLY_TABLE_COLUMNS.map((column) => (
-                              <td key={column.label}>{column.display(row)}</td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </div>
