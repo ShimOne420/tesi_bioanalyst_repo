@@ -907,6 +907,64 @@ def load_ndvi_table(ndvi_path: Path) -> pd.DataFrame:
     raise ValueError(f"Formato tabella NDVI non supportato: {ndvi_path.suffix}")
 
 
+def read_ndvi_columns(ndvi_path: Path) -> list[str]:
+    suffix = ndvi_path.suffix.casefold()
+    if suffix == ".csv":
+        return [str(column).strip() for column in pd.read_csv(ndvi_path, nrows=0).columns]
+    if suffix in {".xlsx", ".xls"}:
+        workbook = pd.ExcelFile(ndvi_path)
+        for sheet_name in workbook.sheet_names:
+            preview = pd.read_excel(workbook, sheet_name=sheet_name, nrows=0)
+            columns = [str(column).strip() for column in preview.columns]
+            normalized = {column.casefold() for column in columns}
+            has_coordinates = (
+                ("latitude" in normalized or "lat" in normalized)
+                and ("longitude" in normalized or "lon" in normalized)
+            )
+            has_monthly_ndvi = any("ndvi" in column.casefold() and re.search(r"\d{4}", column) for column in columns)
+            if has_coordinates and has_monthly_ndvi:
+                return columns
+        return []
+    return []
+
+
+def parse_month_from_column_name(column: str, variable_name: str) -> pd.Timestamp | None:
+    column_text = str(column)
+    if variable_name.casefold() not in column_text.casefold():
+        return None
+
+    patterns = [
+        r"(?P<month>\d{1,2})[\/_-](?P<year>\d{4})",
+        r"(?P<year>\d{4})[\/_-](?P<month>\d{1,2})",
+        r"(?P<year>\d{4})(?P<month>\d{2})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, column_text)
+        if not match:
+            continue
+        year = int(match.group("year"))
+        month = int(match.group("month"))
+        if 1 <= month <= 12:
+            return pd.Timestamp(year=year, month=month, day=1)
+    return None
+
+
+def latest_monthly_column(columns: list[str], variable_name: str) -> pd.Timestamp | None:
+    months = [
+        parsed
+        for column in columns
+        if (parsed := parse_month_from_column_name(str(column), variable_name)) is not None
+    ]
+    return max(months) if months else None
+
+
+def months_after_table_coverage(months: list[pd.Timestamp], columns: list[str], variable_name: str) -> bool:
+    latest = latest_monthly_column(columns, variable_name)
+    if latest is None:
+        return False
+    return max(to_month_start(month) for month in months) > latest
+
+
 def build_vegetation_group_from_ndvi_csv(
     ndvi_path: Path,
     months: list[pd.Timestamp],
@@ -1084,6 +1142,7 @@ def build_vegetation_group_from_sources(
     require_real_ndvi: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Preferisce il CSV NDVI ufficiale BioCube; altrimenti usa la sorgente LAI locale."""
+    allow_missing_future_ndvi = False
     if "land_ndvi_csv" in source_paths:
         ndvi_csv_path = source_paths["land_ndvi_csv"]
         print(f"  [debug] Provo a caricare NDVI da tabella: {ndvi_csv_path}", flush=True)
@@ -1094,11 +1153,26 @@ def build_vegetation_group_from_sources(
         try:
             return build_vegetation_group_from_ndvi_csv(ndvi_csv_path, months, latitudes, longitudes)
         except (KeyError, ValueError, OSError, pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
-            if require_real_ndvi:
+            try:
+                allow_missing_future_ndvi = months_after_table_coverage(
+                    months,
+                    read_ndvi_columns(ndvi_csv_path),
+                    "NDVI",
+                )
+            except (OSError, ValueError, pd.errors.EmptyDataError, pd.errors.ParserError):
+                allow_missing_future_ndvi = False
+
+            if require_real_ndvi and not allow_missing_future_ndvi:
                 raise RuntimeError(
                     "Target observed richiede NDVI reale, ma la tabella NDVI non e' utilizzabile "
                     f"per i mesi {', '.join(month.strftime('%Y-%m') for month in months)}: {exc}"
                 ) from exc
+            if require_real_ndvi and allow_missing_future_ndvi:
+                print(
+                    "  [warn] Target observed oltre la copertura della tabella NDVI; "
+                    "continuo l'inference e marchero NDVI come non disponibile.",
+                    flush=True,
+                )
             print(f"  [warn] Tabella NDVI non utilizzabile per i mesi richiesti ({exc}); provo fallback LAI", flush=True)
     else:
         message = (
@@ -1109,12 +1183,24 @@ def build_vegetation_group_from_sources(
             raise FileNotFoundError(message)
         print(f"  [debug] {message} Chiavi: {list(source_paths.keys())}", flush=True)
     print(f"  [debug] Uso fallback LAI da NetCDF", flush=True)
-    return build_vegetation_group(
-        require_source_path(source_paths, "land_vegetation_dynamic"),
-        months,
-        latitudes,
-        longitudes,
-    )
+    try:
+        return build_vegetation_group(
+            require_source_path(source_paths, "land_vegetation_dynamic"),
+            months,
+            latitudes,
+            longitudes,
+        )
+    except (KeyError, ValueError, OSError) as exc:
+        if require_real_ndvi and not allow_missing_future_ndvi:
+            raise
+        print(
+            "  [warn] NDVI/LAI non disponibile o senza segnale per questi mesi; "
+            "uso placeholder zero solo per permettere l'inference. "
+            "Le metriche NDVI avranno valid_cell_count=0.",
+            flush=True,
+        )
+        print(f"  [debug] Motivo placeholder NDVI: {exc}", flush=True)
+        return build_zero_group(MODEL_VEGETATION_VARS, months)
 
 
 def build_land_group_from_surface(surface_group: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
