@@ -105,8 +105,19 @@ RELIABLE_PLOT_FEATURES = [
 ]
 
 
+def output_root_for_run(run_dir: Path) -> Path:
+    parent = run_dir.parent
+    if parent.name.lower() == "model_forecast":
+        return parent.parent
+    return parent
+
+
 def previsioni_root_for_run(run_dir: Path) -> Path:
-    return run_dir.parent / "previsioni"
+    return output_root_for_run(run_dir) / "previsioni"
+
+
+def chart_root_for_run(run_dir: Path) -> Path:
+    return output_root_for_run(run_dir) / "chart"
 
 
 def previsioni_month_dir(run_dir: Path, manifest: dict[str, Any]) -> Path:
@@ -116,6 +127,87 @@ def previsioni_month_dir(run_dir: Path, manifest: dict[str, Any]) -> Path:
     else:
         month_label = run_dir.name
     return previsioni_root_for_run(run_dir) / month_label
+
+
+def monthly_plot_dir(previsioni_run_dir: Path, variable_name: str) -> Path:
+    return previsioni_run_dir / "plot" / str(variable_name)
+
+
+def monthly_cell_matrix_dir(previsioni_run_dir: Path) -> Path:
+    return previsioni_run_dir / "cell_matrix"
+
+
+def monthly_species_dir(previsioni_run_dir: Path) -> Path:
+    return previsioni_run_dir / "species"
+
+
+def copy_if_present(source: str | None, destination: Path) -> str | None:
+    if not source:
+        return None
+    src_path = Path(source)
+    if not src_path.exists():
+        return None
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src_path, destination)
+    return str(destination)
+
+
+def publish_selected_variable_outputs(
+    *,
+    previsioni_run_dir: Path,
+    variable_name: str,
+    export_paths: dict[str, str],
+) -> dict[str, str]:
+    outputs: dict[str, str] = {}
+    plot_dir = monthly_plot_dir(previsioni_run_dir, variable_name)
+    matrix_dir = monthly_cell_matrix_dir(previsioni_run_dir)
+    copied_prediction = copy_if_present(export_paths.get("prediction_png"), plot_dir / "predicted.png")
+    copied_observed = copy_if_present(export_paths.get("observed_png"), plot_dir / "observed.png")
+    copied_difference = copy_if_present(export_paths.get("difference_png"), plot_dir / "difference.png")
+    copied_matrix = copy_if_present(
+        export_paths.get("matrix_xlsx"),
+        matrix_dir / f"{variable_name}_cell_matrix.xlsx",
+    )
+    if copied_prediction:
+        outputs["prediction_png"] = copied_prediction
+    if copied_observed:
+        outputs["observed_png"] = copied_observed
+    if copied_difference:
+        outputs["difference_png"] = copied_difference
+    if copied_matrix:
+        outputs["matrix_xlsx"] = copied_matrix
+    return outputs
+
+
+def publish_reliable_feature_plot_exports(
+    *,
+    previsioni_run_dir: Path,
+    feature_outputs: dict[str, Any],
+) -> dict[str, Any]:
+    outputs: dict[str, Any] = {
+        "root": str(previsioni_run_dir / "plot"),
+        "features": {},
+        "missing_features": feature_outputs.get("missing_features", []),
+    }
+    feature_map = {
+        feature["file_prefix"]: str(feature["variable"])
+        for feature in RELIABLE_PLOT_FEATURES
+    }
+    for file_prefix, payload in feature_outputs.get("features", {}).items():
+        variable_name = feature_map.get(file_prefix, file_prefix)
+        variable_dir = monthly_plot_dir(previsioni_run_dir, variable_name)
+        copied: dict[str, str] = {}
+        prediction = copy_if_present(payload.get("prediction_png"), variable_dir / "predicted.png")
+        observed = copy_if_present(payload.get("observed_png"), variable_dir / "observed.png")
+        difference = copy_if_present(payload.get("difference_png"), variable_dir / "difference.png")
+        if prediction:
+            copied["prediction_png"] = prediction
+        if observed:
+            copied["observed_png"] = observed
+        if difference:
+            copied["difference_png"] = difference
+        outputs["features"][variable_name] = copied
+    return outputs
 
 
 def build_parser():
@@ -1186,6 +1278,7 @@ def main() -> None:
         args=args,
         project_output_dir=env["project_output_dir"],
         model_dir=env["model_dir"],
+        source_paths=env["source_paths"],
         run_suffix="native_one_step",
     )
     compare_month = (
@@ -1260,6 +1353,9 @@ def main() -> None:
     print("[4/4] Esporto PNG e matrice Excel", flush=True)
     area_specs = build_area_specs(args, manifest)
     previsioni_run_output_dir = previsioni_month_dir(context.run_dir, manifest)
+    previsioni_run_output_dir.mkdir(parents=True, exist_ok=True)
+    previsioni_cell_matrix_dir = monthly_cell_matrix_dir(previsioni_run_output_dir)
+    previsioni_species_dir = monthly_species_dir(previsioni_run_output_dir)
     export_paths, area_summary_frame = export_maps_and_matrix(
         context.run_dir,
         manifest,
@@ -1283,7 +1379,7 @@ def main() -> None:
         result.predicted_batch_original,
         result.observed_batch_original,
         area_specs,
-        export_root=previsioni_run_output_dir,
+        export_root=previsioni_cell_matrix_dir,
         flat_output=True,
         matrix_export_format=args.matrix_export_format,
     )
@@ -1294,9 +1390,18 @@ def main() -> None:
         result.predicted_batch_original,
         result.observed_batch_original,
         area_specs,
-        export_root=previsioni_run_output_dir,
+        export_root=previsioni_species_dir,
         flat_output=True,
         matrix_export_format=args.matrix_export_format,
+    )
+    export_paths["previsioni_selected_variable"] = publish_selected_variable_outputs(
+        previsioni_run_dir=previsioni_run_output_dir,
+        variable_name=args.variable,
+        export_paths=export_paths,
+    )
+    export_paths["previsioni_reliable_feature_plots"] = publish_reliable_feature_plot_exports(
+        previsioni_run_dir=previsioni_run_output_dir,
+        feature_outputs=export_paths["reliable_feature_plots"],
     )
     if not args.no_history:
         default_history_name = (
@@ -1326,7 +1431,7 @@ def main() -> None:
         biomap_workbook_path = (
             args.biomap_final_workbook
             if args.biomap_final_workbook is not None
-            else previsioni_root_for_run(context.run_dir) / DEFAULT_WORKBOOK_NAME
+            else output_root_for_run(context.run_dir) / DEFAULT_WORKBOOK_NAME
         )
         export_paths["biomap_final_workbook"] = update_biomap_final_workbook(
             current_run_dir=context.run_dir,

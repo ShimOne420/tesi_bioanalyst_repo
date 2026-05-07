@@ -17,13 +17,19 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable
 
+import matplotlib
+
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_FORECAST_ROOT = REPO_ROOT / "outputs" / "local_preview" / "model_forecast"
 DEFAULT_PREVISIONI_DIRNAME = "previsioni"
-DEFAULT_WORKBOOK_NAME = "BIOMAP_FINAL_FEATURE_ANALYSIS_NATIVE_BIOANALYST.xlsx"
+DEFAULT_CHART_DIRNAME = "chart"
+DEFAULT_WORKBOOK_NAME = "FINAL_FEATURES_ANALYSIS.xlsx"
 
 import analyze_latest_native_tests as ant  # noqa: E402
 from biomap_metric_utils import PRECIPITATION_AUDIT, continuous_metric_summary  # noqa: E402
@@ -237,11 +243,23 @@ def infer_runs_root(current_run_dir: Path | None, workbook_path: Path | None) ->
         parent = workbook_path.parent
         if parent.name == DEFAULT_PREVISIONI_DIRNAME:
             return parent.parent
+        if (parent / "model_forecast").exists():
+            return parent / "model_forecast"
     return DEFAULT_MODEL_FORECAST_ROOT
 
 
+def output_root_from_runs_root(runs_root: Path) -> Path:
+    if runs_root.name.lower() == "model_forecast":
+        return runs_root.parent
+    return runs_root
+
+
 def default_workbook_path(runs_root: Path) -> Path:
-    return runs_root / DEFAULT_PREVISIONI_DIRNAME / DEFAULT_WORKBOOK_NAME
+    return output_root_from_runs_root(runs_root) / DEFAULT_WORKBOOK_NAME
+
+
+def default_chart_root(runs_root: Path) -> Path:
+    return output_root_from_runs_root(runs_root) / DEFAULT_CHART_DIRNAME
 
 
 def iter_run_dirs(root: Path) -> list[Path]:
@@ -647,6 +665,188 @@ def filter_metrics(frame: pd.DataFrame, predicate: Callable[[pd.DataFrame], pd.S
     return output.reset_index(drop=True)
 
 
+CHART_VARIABLE_SPECS = [
+    ("climate", "t2m", "t2m"),
+    ("climate", "tp", "tp"),
+    ("vegetation", "NDVI", "NDVI"),
+    ("edaphic", "swvl1", "swvl1"),
+    ("edaphic", "swvl2", "swvl2"),
+    ("agriculture", "Cropland", "Cropland"),
+]
+
+
+def chart_metric_frame(metrics: pd.DataFrame, *, group: str, variable: str) -> pd.DataFrame:
+    frame = metrics[(metrics["group"] == group) & (metrics["variable"] == variable)].copy()
+    if frame.empty:
+        return frame
+    frame["forecast_month_dt"] = pd.to_datetime(frame["forecast_month"], errors="coerce")
+    numeric_columns = [
+        "predicted_mean",
+        "observed_mean",
+        "mae",
+        "rmse",
+        "correlation",
+        "wape_pct",
+        "smape_pct",
+    ]
+    aggregated = (
+        frame.groupby("forecast_month_dt", dropna=False)[numeric_columns]
+        .mean(numeric_only=True)
+        .reset_index()
+        .sort_values("forecast_month_dt")
+    )
+    aggregated["forecast_month"] = aggregated["forecast_month_dt"].dt.strftime("%Y-%m")
+    aggregated["year"] = aggregated["forecast_month_dt"].dt.year
+    return aggregated
+
+
+def save_multi_line_chart(
+    frame: pd.DataFrame,
+    *,
+    output_path: Path,
+    title: str,
+    y_columns: list[str],
+    ylabel: str,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    x_labels = frame["forecast_month"].tolist()
+    plt.figure(figsize=(11, 5.5))
+    for column in y_columns:
+        plt.plot(x_labels, frame[column], marker="o", linewidth=2, label=column)
+    plt.title(title)
+    plt.xlabel("Forecast month")
+    plt.ylabel(ylabel)
+    plt.grid(True, alpha=0.25)
+    plt.legend()
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=180)
+    plt.close()
+
+
+def save_single_metric_chart(
+    frame: pd.DataFrame,
+    *,
+    output_path: Path,
+    title: str,
+    y_column: str,
+    ylabel: str,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    x_labels = frame["forecast_month"].tolist()
+    plt.figure(figsize=(11, 5.5))
+    plt.plot(x_labels, frame[y_column], marker="o", linewidth=2, color="#2E5EAA")
+    plt.title(title)
+    plt.xlabel("Forecast month")
+    plt.ylabel(ylabel)
+    plt.grid(True, alpha=0.25)
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=180)
+    plt.close()
+
+
+def save_yearly_summary_chart(frame: pd.DataFrame, *, output_path: Path, title: str) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    yearly = (
+        frame.groupby("year", dropna=False)[
+            ["predicted_mean", "observed_mean", "mae", "rmse", "wape_pct", "smape_pct", "correlation"]
+        ]
+        .mean(numeric_only=True)
+        .reset_index()
+        .sort_values("year")
+    )
+    if yearly.empty:
+        return
+    x_labels = [str(int(year)) for year in yearly["year"].tolist()]
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
+    fig.suptitle(title)
+
+    axes[0, 0].plot(x_labels, yearly["predicted_mean"], marker="o", linewidth=2, label="predicted_mean")
+    axes[0, 0].plot(x_labels, yearly["observed_mean"], marker="o", linewidth=2, label="observed_mean")
+    axes[0, 0].set_title("Observed vs predicted")
+    axes[0, 0].grid(True, alpha=0.25)
+    axes[0, 0].legend()
+
+    axes[0, 1].plot(x_labels, yearly["mae"], marker="o", linewidth=2, label="MAE")
+    axes[0, 1].plot(x_labels, yearly["rmse"], marker="o", linewidth=2, label="RMSE")
+    axes[0, 1].set_title("MAE and RMSE")
+    axes[0, 1].grid(True, alpha=0.25)
+    axes[0, 1].legend()
+
+    axes[1, 0].plot(x_labels, yearly["wape_pct"], marker="o", linewidth=2, label="WAPE")
+    axes[1, 0].plot(x_labels, yearly["smape_pct"], marker="o", linewidth=2, label="sMAPE")
+    axes[1, 0].set_title("WAPE and sMAPE")
+    axes[1, 0].grid(True, alpha=0.25)
+    axes[1, 0].legend()
+
+    axes[1, 1].plot(x_labels, yearly["correlation"], marker="o", linewidth=2, color="#2E5EAA")
+    axes[1, 1].set_title("Correlation")
+    axes[1, 1].grid(True, alpha=0.25)
+
+    for axis in axes.flat:
+        axis.tick_params(axis="x", rotation=45)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
+def generate_feature_chart_artifacts(metrics: pd.DataFrame, *, chart_root: Path) -> dict[str, dict[str, str]]:
+    outputs: dict[str, dict[str, str]] = {}
+    for group, variable, folder_name in CHART_VARIABLE_SPECS:
+        frame = chart_metric_frame(metrics, group=group, variable=variable)
+        if frame.empty:
+            continue
+        variable_root = chart_root / folder_name
+        observed_vs_predicted_path = variable_root / "observed_vs_predicted_by_month.png"
+        mae_rmse_path = variable_root / "mae_rmse_by_month.png"
+        wape_smape_path = variable_root / "wape_smape_by_month.png"
+        correlation_path = variable_root / "correlation_by_month.png"
+        yearly_summary_path = variable_root / "yearly_summary.png"
+
+        save_multi_line_chart(
+            frame,
+            output_path=observed_vs_predicted_path,
+            title=f"{variable}: observed vs predicted by month",
+            y_columns=["observed_mean", "predicted_mean"],
+            ylabel="Mean value",
+        )
+        save_multi_line_chart(
+            frame,
+            output_path=mae_rmse_path,
+            title=f"{variable}: MAE and RMSE by month",
+            y_columns=["mae", "rmse"],
+            ylabel="Error",
+        )
+        save_multi_line_chart(
+            frame,
+            output_path=wape_smape_path,
+            title=f"{variable}: WAPE and sMAPE by month",
+            y_columns=["wape_pct", "smape_pct"],
+            ylabel="Percent",
+        )
+        save_single_metric_chart(
+            frame,
+            output_path=correlation_path,
+            title=f"{variable}: correlation by month",
+            y_column="correlation",
+            ylabel="Correlation",
+        )
+        save_yearly_summary_chart(
+            frame,
+            output_path=yearly_summary_path,
+            title=f"{variable}: yearly summary",
+        )
+        outputs[folder_name] = {
+            "observed_vs_predicted_by_month": str(observed_vs_predicted_path),
+            "mae_rmse_by_month": str(mae_rmse_path),
+            "wape_smape_by_month": str(wape_smape_path),
+            "correlation_by_month": str(correlation_path),
+            "yearly_summary": str(yearly_summary_path),
+        }
+    return outputs
+
+
 def write_workbook(path: Path, sheets: OrderedDict[str, pd.DataFrame]) -> Path:
     from openpyxl import Workbook
     from openpyxl.cell import WriteOnlyCell
@@ -708,7 +908,9 @@ def update_biomap_final_workbook(
 ) -> dict[str, Any]:
     runs_root = infer_runs_root(current_run_dir, workbook_path)
     workbook_path = workbook_path or default_workbook_path(runs_root)
+    chart_root = default_chart_root(runs_root)
     workbook_path.parent.mkdir(parents=True, exist_ok=True)
+    chart_root.mkdir(parents=True, exist_ok=True)
 
     print(f"[workbook] Scansiono run storici in: {runs_root}", flush=True)
     run_dirs = iter_run_dirs(runs_root)
@@ -763,11 +965,15 @@ def update_biomap_final_workbook(
     sheets["Species_Native_By_ID"] = filter_metrics(all_metrics, lambda frame: frame["group"] == "species")
     sheets["All_Variables"] = all_metrics
 
+    print("[workbook] Genero chart cumulativi", flush=True)
+    chart_outputs = generate_feature_chart_artifacts(all_metrics, chart_root=chart_root)
     print("[workbook] Scrittura workbook Excel", flush=True)
     written_workbook = write_workbook(workbook_path, sheets)
     print(f"[workbook] Workbook scritto: {written_workbook}", flush=True)
     return {
         "workbook": str(written_workbook),
+        "chart_root": str(chart_root),
+        "charts": chart_outputs,
         "runs_used": len(run_dirs),
         "latest_run": str(current_run_dir),
         "sheet_count": len(sheets),

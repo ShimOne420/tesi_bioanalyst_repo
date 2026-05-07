@@ -28,6 +28,7 @@ from bioanalyst_model_utils import (
     PROJECT_ROOT,
     build_native_group_source_status,
     build_local_config,
+    climate_last_available_month,
     ensure_bfm_repo_on_path,
     load_project_env,
     raw_dict_to_batch,
@@ -167,11 +168,18 @@ def build_native_run_context(
     args,
     project_output_dir: Path,
     model_dir: Path,
+    source_paths: dict[str, Path] | None = None,
     run_suffix: str,
 ) -> NativeRunContext:
     """Risolviamo area, periodo, checkpoint e cartelle di output del runner nativo."""
     selection_mode, bounds, label = resolve_selection(args)
-    months_info = resolve_forecast_months(args.start, args.end)
+    use_atmospheric_data = not bool(getattr(args, "fast_smoke_test", False))
+    climate_last = (
+        climate_last_available_month(source_paths, use_atmospheric_data=use_atmospheric_data)
+        if source_paths is not None
+        else None
+    )
+    months_info = resolve_forecast_months(args.start, args.end, climate_last_available=climate_last)
     device = resolve_torch_device(args.device)
     checkpoint_path = resolve_checkpoint_path(model_dir, args.checkpoint)
     input_mode = getattr(args, "input_mode", "all")
@@ -390,6 +398,8 @@ def save_native_one_step_artifacts(
             str(context.months_info["input_last"].date()),
         ],
         "forecast_month": str(result.forecast_month.date()),
+        "climate_last_available": str(context.months_info["climate_last_available"].date()),
+        "compare_available": bool(context.months_info["compare_available"]),
         "raw_batch_input": str(result.saved_windows["input_window"]),
         "raw_batch_target": str(result.saved_windows["target_window"]) if "target_window" in result.saved_windows else None,
         "target_input_mode": target_input_mode,
@@ -439,6 +449,8 @@ def save_native_rollout_artifacts(
             str(context.months_info["input_last"].date()),
         ],
         "forecast_months": [str(month.date()) for month in result.forecast_months],
+        "climate_last_available": str(context.months_info["climate_last_available"].date()),
+        "compare_available": bool(context.months_info["compare_available"]),
         "raw_batch_input": str(result.saved_windows["input_window"]),
         "raw_batch_target": str(result.saved_windows["target_window"]) if "target_window" in result.saved_windows else None,
         "native_rollout_batches": [str(path) for path in batch_paths],

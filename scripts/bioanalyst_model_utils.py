@@ -390,7 +390,11 @@ def resolve_selection(args: argparse.Namespace) -> tuple[str, dict[str, float], 
 
 
 # Verifichiamo che il periodo scelto abbia almeno due mesi e rientri nella parte climatica disponibile.
-def resolve_forecast_months(start: str, end: str) -> dict[str, pd.Timestamp | bool]:
+def resolve_forecast_months(
+    start: str,
+    end: str,
+    climate_last_available: pd.Timestamp | None = None,
+) -> dict[str, pd.Timestamp | bool]:
     start_month = to_month_start(start)
     end_month = to_month_start(end)
     if end_month < start_month:
@@ -403,10 +407,14 @@ def resolve_forecast_months(start: str, end: str) -> dict[str, pd.Timestamp | bo
     input_prev = observed_months[-2]
     input_last = observed_months[-1]
     forecast_month = shift_month(input_last, 1)
-    climate_last_available = pd.Timestamp("2020-12-01")
+    climate_last_available = to_month_start(climate_last_available or input_last)
 
     if input_last > climate_last_available:
-        raise SystemExit("Il forecast locale usa ancora il blocco climatico BioCube 2000-2020. Scegli un `end` entro 2020-12.")
+        raise SystemExit(
+            "Il forecast locale non trova input climatici sufficienti per il periodo richiesto. "
+            f"Ultimo mese climatico disponibile: {climate_last_available:%Y-%m}. "
+            f"Hai scelto end={input_last:%Y-%m}."
+        )
 
     compare_available = forecast_month <= climate_last_available
     return {
@@ -416,7 +424,34 @@ def resolve_forecast_months(start: str, end: str) -> dict[str, pd.Timestamp | bo
         "input_last": input_last,
         "forecast_month": forecast_month,
         "compare_available": compare_available,
+        "climate_last_available": climate_last_available,
     }
+
+
+def dataset_last_available_month(path: Path) -> pd.Timestamp:
+    with xr.open_dataset(path, engine="netcdf4") as ds:
+        if "valid_time" not in ds:
+            raise KeyError(f"`valid_time` non trovato in {path}")
+        times = pd.to_datetime(ds["valid_time"].values)
+        if len(times) == 0:
+            raise ValueError(f"Nessun valid_time disponibile in {path}")
+        return pd.Timestamp(times.max()).to_period("M").to_timestamp()
+
+
+def climate_last_available_month(source_paths: dict[str, Path], *, use_atmospheric_data: bool = True) -> pd.Timestamp:
+    """Calcola il limite reale dai NetCDF core locali invece di usare un anno hardcoded."""
+    keys = ["surface", "edaphic", "climate_a", "climate_b"]
+    if use_atmospheric_data and "atmos" in source_paths:
+        keys.append("atmos")
+
+    availability = {
+        key: dataset_last_available_month(source_paths[key])
+        for key in keys
+        if key in source_paths
+    }
+    if not availability:
+        raise ValueError("Nessun dataset climatico core disponibile per calcolare il periodo massimo.")
+    return min(availability.values())
 
 
 # Risolviamo i path dei file sorgente raw realmente usati nella costruzione dei batch.
