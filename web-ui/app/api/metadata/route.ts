@@ -2,19 +2,15 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+const DEFAULT_LOCAL_BACKEND_URL = "http://127.0.0.1:8000";
+
+function getBackendBaseUrl() {
+  return process.env.PYTHON_API_BASE_URL?.trim() || DEFAULT_LOCAL_BACKEND_URL;
+}
+
 export async function GET() {
   try {
-    const backendBaseUrl = process.env.PYTHON_API_BASE_URL;
-
-    if (!backendBaseUrl) {
-      return NextResponse.json(
-        {
-          error:
-            "Backend reale non configurato: imposta PYTHON_API_BASE_URL in web-ui/.env.local e avvia FastAPI."
-        },
-        { status: 503 }
-      );
-    }
+    const backendBaseUrl = getBackendBaseUrl();
 
     const forwarded = await fetch(`${backendBaseUrl}/api/metadata`, {
       method: "GET",

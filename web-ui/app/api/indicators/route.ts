@@ -4,6 +4,12 @@ import type { SelectionBounds } from "../../../lib/types";
 
 export const runtime = "nodejs";
 
+const DEFAULT_LOCAL_BACKEND_URL = "http://127.0.0.1:8000";
+
+function getBackendBaseUrl() {
+  return process.env.PYTHON_API_BASE_URL?.trim() || DEFAULT_LOCAL_BACKEND_URL;
+}
+
 type RequestBody = {
   selectionMode: "city" | "bbox";
   city?: string;
@@ -19,7 +25,7 @@ type RequestBody = {
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as RequestBody;
-    const backendBaseUrl = process.env.PYTHON_API_BASE_URL;
+    const backendBaseUrl = getBackendBaseUrl();
 
     if (!body.start || !body.end) {
       return NextResponse.json({ error: "Periodo mancante." }, { status: 400 });
@@ -31,16 +37,6 @@ export async function POST(request: Request) {
 
     if (body.selectionMode === "bbox" && !body.bounds) {
       return NextResponse.json({ error: "Bounding box mancante." }, { status: 400 });
-    }
-
-    if (!backendBaseUrl) {
-      return NextResponse.json(
-        {
-          error:
-            "Backend reale non configurato: imposta PYTHON_API_BASE_URL in web-ui/.env.local e avvia FastAPI."
-        },
-        { status: 503 }
-      );
     }
 
     const forwarded = await fetch(`${backendBaseUrl}/api/indicators`, {

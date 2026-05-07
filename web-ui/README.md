@@ -40,13 +40,15 @@ npm install
 npm run dev
 ```
 
-Per usare i dati reali in locale crea `web-ui/.env.local` con:
+In sviluppo locale, se `PYTHON_API_BASE_URL` non e configurato, la UI prova automaticamente il backend reale su `http://127.0.0.1:8000`.
+
+Puoi comunque creare `web-ui/.env.local` per essere esplicito:
 
 ```bash
 PYTHON_API_BASE_URL=http://127.0.0.1:8000
 ```
 
-In questo modo la route API inoltra la richiesta al backend `FastAPI` locale. Se questa variabile manca, `/api/metadata`, `/api/indicators` e i download non usano dati finti: rispondono con errore di configurazione.
+In questo modo la route API inoltra la richiesta al backend `FastAPI` locale. Non ci sono dati finti: se FastAPI non e acceso o non trova BioCube, la UI mostra l'errore reale.
 
 Anche il backend deve sapere dove sono i dati BioCube. Se sul PC universitario li hai spostati su SSD `F:`, crea nella root del repo `.env.local` e imposta:
 
