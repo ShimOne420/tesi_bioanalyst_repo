@@ -37,7 +37,24 @@ source scripts/activate_project.sh
 uvicorn backend_api.main:app --reload --port 8000
 ```
 
-Il dataset resta su `Archivio`, ma il backend gira in locale e quindi può leggerlo attraverso i path del file `.env`.
+Il backend legge prima `.env` e poi `.env.local`. Il file `.env.local` serve per i path specifici della macchina e sovrascrive `.env`.
+
+Sulla macchina universitaria Windows, se hai spostato BioCube sul disco SSD `F:`, crea nella root del repo un file `.env.local` partendo da `.env.local.example`:
+
+```powershell
+Copy-Item .env.local.example .env.local
+notepad .env.local
+```
+
+Dentro `.env.local` imposta `BIOCUBE_DIR` sulla cartella reale `biocube`, ad esempio:
+
+```env
+BIOCUBE_DIR=F:/biomap_thesis/data/biocube
+PROJECT_OUTPUT_DIR=outputs/local_preview
+BIOANALYST_MODEL_DIR=models
+```
+
+Usa slash `/` anche su Windows, cosi eviti problemi di escape con `\`.
 
 ## Nota pratica
 

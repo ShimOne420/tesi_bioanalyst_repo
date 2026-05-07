@@ -76,6 +76,15 @@ def require_path(env_name: str) -> Path:
     return path
 
 
+def resolve_output_dir(env_name: str) -> Path:
+    value = os.getenv(env_name)
+    if not value:
+        raise RuntimeError(f"Variabile d'ambiente mancante: {env_name}")
+    path = Path(value).expanduser()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 # Convertiamo una label arbitraria in uno slug adatto ai nomi file.
 def slugify(value: str) -> str:
     normalized = re.sub(r"[^a-zA-Z0-9]+", "_", value.strip().lower())
@@ -721,9 +730,10 @@ def main() -> None:
         return
 
     load_dotenv(PROJECT_ROOT / ".env")
+    load_dotenv(PROJECT_ROOT / ".env.local", override=True)
 
     biocube_dir = require_path("BIOCUBE_DIR")
-    output_dir = require_path("PROJECT_OUTPUT_DIR")
+    output_dir = resolve_output_dir("PROJECT_OUTPUT_DIR")
     source_paths = resolve_source_paths(biocube_dir)
 
     selection_mode, bounds, label = resolve_selection(args)

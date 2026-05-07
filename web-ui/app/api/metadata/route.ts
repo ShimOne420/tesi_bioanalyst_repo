@@ -22,7 +22,12 @@ export async function GET() {
     });
 
     const responseText = await forwarded.text();
-    const payload = responseText ? JSON.parse(responseText) : {};
+    let payload: unknown = {};
+    try {
+      payload = responseText ? JSON.parse(responseText) : {};
+    } catch {
+      payload = { error: responseText || "Il backend non ha restituito una risposta JSON." };
+    }
     return NextResponse.json(payload, { status: forwarded.status });
   } catch (error) {
     return NextResponse.json(

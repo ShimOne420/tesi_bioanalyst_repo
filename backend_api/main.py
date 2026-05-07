@@ -31,6 +31,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "local_preview"
 CITY_CATALOG_PATH = PROJECT_ROOT / "data" / "european_cities.json"
 load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT / ".env.local", override=True)
 
 
 # Configuriamo l'app FastAPI con CORS locale per la UI Next.js su localhost.
@@ -88,15 +89,21 @@ def load_city_lookup() -> dict[str, dict[str, Any]]:
     return {city["value"]: city for city in load_city_catalog()}
 
 
-# Leggiamo il path del dataset dal file `.env` per usare i file reali di BioCube.
+# Leggiamo il path del dataset dai file `.env` / `.env.local` per usare i file reali di BioCube.
 def get_biocube_dir() -> Path:
     raw_value = os.getenv("BIOCUBE_DIR")
     if not raw_value:
-        raise HTTPException(status_code=500, detail="BIOCUBE_DIR non configurata nel file .env.")
+        raise HTTPException(status_code=500, detail="BIOCUBE_DIR non configurata in .env o .env.local.")
 
     path = Path(raw_value).expanduser()
     if not path.exists():
-        raise HTTPException(status_code=500, detail=f"BIOCUBE_DIR non trovata: {path}")
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"BIOCUBE_DIR non trovata: {path}. Se hai spostato i dati su SSD F:, aggiorna "
+                "BIOCUBE_DIR nel file .env.local della root del repo."
+            ),
+        )
 
     return path
 
@@ -132,10 +139,24 @@ def get_source_paths() -> dict[str, Path]:
     }
 
 
+def validate_source_paths(source_paths: dict[str, Path]) -> None:
+    missing = [f"{name}: {path}" for name, path in source_paths.items() if not path.exists()]
+    if missing:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "BIOCUBE_DIR e raggiungibile, ma mancano alcuni file richiesti dalla pipeline "
+                "osservativa. Controlla che BIOCUBE_DIR punti alla cartella biocube sul disco SSD F:. "
+                f"File mancanti: {'; '.join(missing)}"
+            ),
+        )
+
+
 # Calcoliamo una sola volta il periodo realmente disponibile leggendo i file locali del dataset.
 @lru_cache(maxsize=1)
 def get_dataset_metadata() -> dict[str, Any]:
     source_paths = get_source_paths()
+    validate_source_paths(source_paths)
 
     species_df = pd.read_parquet(source_paths["species"], columns=["Timestamp"])
     species_min = pd.to_datetime(species_df["Timestamp"]).min().to_period("M").to_timestamp()
@@ -305,6 +326,9 @@ def build_indicator_command(body: dict[str, Any]) -> tuple[list[str], str]:
 
 # Eseguiamo lo script Python locale e leggiamo gli output prodotti nella cartella `local_preview`.
 def run_indicator_job(body: dict[str, Any]) -> dict[str, Any]:
+    validate_source_paths(get_source_paths())
+    LOCAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
     cmd, label_slug = build_indicator_command(body)
 
     completed = subprocess.run(

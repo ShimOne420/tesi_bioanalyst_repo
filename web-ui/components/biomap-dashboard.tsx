@@ -56,6 +56,20 @@ function formatNumber(value: number | null, unit: string, decimals = 2) {
   return unit ? `${formatted} ${unit}` : formatted;
 }
 
+async function readApiError(response: Response, fallback: string) {
+  try {
+    const payload = (await response.json()) as { detail?: unknown; error?: unknown };
+    const message = payload.detail ?? payload.error;
+    if (typeof message === "string" && message.trim()) {
+      return message;
+    }
+  } catch {
+    // La risposta puo non essere JSON, in quel caso usiamo il fallback leggibile.
+  }
+
+  return fallback;
+}
+
 const TABLE_COLUMNS: Array<{
   label: string;
   value: (row: IndicatorRow) => string | number | null;
@@ -199,7 +213,9 @@ export function BiomapDashboard() {
       try {
         const response = await fetch("/api/metadata", { cache: "no-store" });
         if (!response.ok) {
-          throw new Error("Non sono riuscito a leggere il periodo disponibile del dataset.");
+          throw new Error(
+            await readApiError(response, "Non sono riuscito a leggere il periodo disponibile del dataset.")
+          );
         }
 
         const payload = (await response.json()) as DatasetMetadata;
@@ -337,7 +353,7 @@ export function BiomapDashboard() {
       });
 
       if (!response.ok) {
-        throw new Error("Richiesta non completata.");
+        throw new Error(await readApiError(response, "Richiesta non completata."));
       }
 
       const payload = (await response.json()) as IndicatorResponse;
