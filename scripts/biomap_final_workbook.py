@@ -234,7 +234,11 @@ def run_label(manifest: dict[str, Any], run_dir: Path) -> str:
     return str(manifest.get("label") or run_dir.name)
 
 
-def infer_runs_root(current_run_dir: Path | None, workbook_path: Path | None) -> Path:
+def infer_runs_root(
+    current_run_dir: Path | None,
+    workbook_path: Path | None,
+    fallback_runs_root: Path = DEFAULT_MODEL_FORECAST_ROOT,
+) -> Path:
     if current_run_dir is not None:
         for candidate in [current_run_dir, *current_run_dir.parents]:
             if candidate.name.lower() == "model_forecast":
@@ -245,7 +249,7 @@ def infer_runs_root(current_run_dir: Path | None, workbook_path: Path | None) ->
             return parent.parent
         if (parent / "model_forecast").exists():
             return parent / "model_forecast"
-    return DEFAULT_MODEL_FORECAST_ROOT
+    return fallback_runs_root
 
 
 def output_root_from_runs_root(runs_root: Path) -> Path:
@@ -516,6 +520,24 @@ def compute_species_summary(runs: list[Path], current_batches: dict[Path, tuple[
     return frame
 
 
+def build_species_index(metrics: pd.DataFrame) -> pd.DataFrame:
+    species_frame = metrics.loc[metrics["group"] == "species", ["variable"]].dropna().drop_duplicates()
+    if species_frame.empty:
+        return pd.DataFrame(columns=["species_id", "sheet_name", "scientific_name", "common_name", "note"])
+    species_frame = species_frame.sort_values("variable").reset_index(drop=True)
+    rows = [
+        {
+            "species_id": str(row["variable"]),
+            "sheet_name": f"sp_{row['variable']}",
+            "scientific_name": None,
+            "common_name": None,
+            "note": "ID specie del canale target BioAnalyst",
+        }
+        for _, row in species_frame.iterrows()
+    ]
+    return pd.DataFrame(rows)
+
+
 def build_dashboard(metrics: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for keys, group_frame in metrics.groupby(["group", "variable", "unit", "biomap_domain", "biomap_use"], dropna=False):
@@ -539,7 +561,6 @@ def build_dashboard(metrics: pd.DataFrame) -> pd.DataFrame:
                 "median_corr": float(group_frame["correlation"].median()),
                 "mean_r2_corr_squared": float(group_frame["r2_corr_squared"].mean()),
                 "mean_wape_pct": float(group_frame["wape_pct"].mean()),
-                "mean_smaape_pct": float(group_frame["smaape_pct"].mean()),
                 "mean_smape_pct": float(group_frame["smape_pct"].mean()),
                 "mean_relative_mae_pct": float(group_frame["relative_mae_pct"].mean()),
                 "ready_or_usable_months": int(len(ready_months)),
@@ -578,7 +599,7 @@ def build_indicator_map(dashboard: pd.DataFrame) -> pd.DataFrame:
                 "mean_mae": row["mean_mae"],
                 "mean_rmse": row["mean_rmse"],
                 "mean_wape_pct": row["mean_wape_pct"],
-                "mean_smaape_pct": row["mean_smaape_pct"],
+                "mean_smape_pct": row["mean_smape_pct"],
                 "mean_bias": row["mean_bias"],
                 "mean_corr": row["mean_corr"],
                 "readiness_ratio": row["readiness_ratio"],
@@ -601,7 +622,7 @@ def metric_guide() -> pd.DataFrame:
             ("bias", "Media di (predetto - osservato).", "Variabili continue", "Positivo = sovrastima; negativo = sottostima."),
             ("correlation", "Correlazione di Pearson tra predetto e osservato.", "Pattern spaziali o strutturali", "Alta correlazione non implica valori assoluti corretti."),
             ("WAPE", "100 * somma(|predetto - osservato|) / somma(|osservato|).", "Errore percentuale aggregato", "Non definito se la somma degli osservati assoluti e zero."),
-            ("SMAAPE", "Media di 200 * |predetto - osservato| / (|predetto| + |osservato|).", "Errore percentuale simmetrico", "Limitato a 0-200%, ma puo essere severo vicino a zero."),
+            ("sMAPE", "Media di 200 * |predetto - osservato| / (|predetto| + |osservato|).", "Errore percentuale simmetrico", "Limitato a 0-200%, ma puo essere severo vicino a zero."),
             ("relative_mae_pct", "100 * MAE / abs(media osservata).", "Confronti percentuali tra variabili", "Instabile se la media osservata e vicina a zero."),
             ("tp", "True positives: presenze correttamente previste.", "Specie / binario", "Dipende dalla soglia scelta."),
             ("fp", "False positives: presenze previste ma non osservate.", "Specie / binario", "Troppi fp indicano sovrastima delle presenze."),
@@ -906,7 +927,7 @@ def update_biomap_final_workbook(
     runs_root: Path = DEFAULT_MODEL_FORECAST_ROOT,
     workbook_path: Path | None = None,
 ) -> dict[str, Any]:
-    runs_root = infer_runs_root(current_run_dir, workbook_path)
+    runs_root = infer_runs_root(current_run_dir, workbook_path, runs_root)
     workbook_path = workbook_path or default_workbook_path(runs_root)
     chart_root = default_chart_root(runs_root)
     workbook_path.parent.mkdir(parents=True, exist_ok=True)
@@ -944,6 +965,7 @@ def update_biomap_final_workbook(
     dashboard = build_dashboard(all_metrics)
     indicator_map = build_indicator_map(dashboard)
     coverage = coverage_from_metrics(all_metrics)
+    species_index = build_species_index(all_metrics)
 
     sheets: OrderedDict[str, pd.DataFrame] = OrderedDict()
     sheets["Dashboard_BIOMAP"] = dashboard
@@ -954,6 +976,7 @@ def update_biomap_final_workbook(
     sheets["Temperature_t2m"] = filter_metrics(all_metrics, lambda frame: (frame["group"] == "climate") & (frame["variable"] == "t2m"))
     sheets["Precipitation_tp"] = filter_metrics(all_metrics, lambda frame: (frame["group"] == "climate") & (frame["variable"] == "tp"))
     sheets["Species_Biodiversity"] = species_metrics
+    sheets["Species_Index"] = species_index
     sheets["Vegetation_NDVI"] = filter_metrics(all_metrics, lambda frame: (frame["group"] == "vegetation") & (frame["variable"] == "NDVI"))
     sheets["Forest"] = filter_metrics(all_metrics, lambda frame: frame["group"] == "forest")
     sheets["Agriculture_Cropland"] = filter_metrics(all_metrics, lambda frame: frame["group"] == "agriculture")

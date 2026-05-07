@@ -690,6 +690,7 @@ def find_monthly_column(columns: list[str], variable_name: str, month: pd.Timest
     """Trova una colonna mensile in CSV BioCube accettando i formati piu probabili."""
     month = to_month_start(month)
     month_number = int(month.month)
+    year_text = str(month.year)
     month_tokens = {
         f"{month_number}",
         f"{month_number:02d}",
@@ -719,6 +720,34 @@ def find_monthly_column(columns: list[str], variable_name: str, month: pd.Timest
         match = lookup.get(candidate.casefold())
         if match is not None:
             return match
+
+    variable_compact = re.sub(r"[^a-zA-Z0-9]+", "", str(variable_name)).casefold()
+    compact_candidates = {
+        f"{variable_compact}{month_number:02d}{year_text}",
+        f"{variable_compact}{month_number}{year_text}",
+        f"{variable_compact}{year_text}{month_number:02d}",
+        f"{variable_compact}{year_text}{month_number}",
+        f"{month_number:02d}{year_text}{variable_compact}",
+        f"{month_number}{year_text}{variable_compact}",
+        f"{year_text}{month_number:02d}{variable_compact}",
+        f"{year_text}{month_number}{variable_compact}",
+    }
+    for column in columns:
+        column_text = str(column)
+        compact = re.sub(r"[^a-zA-Z0-9]+", "", column_text).casefold()
+        if compact in compact_candidates:
+            return column_text
+
+    regex_patterns = [
+        re.compile(rf"{re.escape(variable_name)}\D*0?{month_number}\D*{year_text}", re.IGNORECASE),
+        re.compile(rf"{re.escape(variable_name)}\D*{year_text}\D*0?{month_number}", re.IGNORECASE),
+        re.compile(rf"0?{month_number}\D*{year_text}\D*{re.escape(variable_name)}", re.IGNORECASE),
+        re.compile(rf"{year_text}\D*0?{month_number}\D*{re.escape(variable_name)}", re.IGNORECASE),
+    ]
+    for column in columns:
+        column_text = str(column)
+        if any(pattern.search(column_text) for pattern in regex_patterns):
+            return column_text
 
     ignored = {"country", "latitude", "longitude", "lat", "lon", "year", "month", "date", "timestamp", "variable"}
     regex_matches = []
