@@ -37,11 +37,13 @@ from minimum_indicator_utils import snap_coordinates_to_grid
 
 try:
     import rasterio
+    from rasterio.io import MemoryFile
     from rasterio.enums import Resampling
     from rasterio.transform import from_origin
     from rasterio.warp import reproject
 except ImportError:  # pragma: no cover
     rasterio = None
+    MemoryFile = None
     Resampling = None
     from_origin = None
     reproject = None
@@ -221,47 +223,31 @@ def find_raw_year_sources(dataset_kind: str, source_root: Path, years: list[int]
     return resolved
 
 
-def extract_archive_to_tifs(archive_path: Path) -> list[Path]:
-    if archive_path.suffix.casefold() in TIFF_SUFFIXES:
-        return [archive_path]
-    if archive_path.suffix.casefold() != ".zip":
-        raise ValueError(f"Formato non supportato: {archive_path}")
-
-    extract_dir = archive_path.parent / "_extracted_tiles" / archive_path.stem
-    existing = sorted(
-        [path for path in extract_dir.rglob("*") if path.is_file() and path.suffix.casefold() in TIFF_SUFFIXES],
-        key=lambda item: item.as_posix().casefold(),
-    )
-    if existing:
-        return existing
-
-    extract_dir.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(archive_path) as archive:
-        raster_members = [
-            member
-            for member in archive.namelist()
-            if member.lower().endswith((".tif", ".tiff"))
-        ]
-        if not raster_members:
-            raise ValueError(f"{archive_path.name}: zip senza raster .tif/.tiff")
-        archive.extractall(extract_dir, members=raster_members)
-
-    extracted = sorted(
-        [path for path in extract_dir.rglob("*") if path.is_file() and path.suffix.casefold() in TIFF_SUFFIXES],
-        key=lambda item: item.as_posix().casefold(),
-    )
-    if not extracted:
-        raise ValueError(f"{archive_path.name}: nessun raster trovato dopo estrazione")
-    return extracted
-
-
-def expand_raster_tile_paths(tile_paths: list[Path]) -> list[Path]:
-    expanded: list[Path] = []
+def iter_raster_datasets(tile_paths: list[Path]):
+    if rasterio is None or MemoryFile is None:
+        raise ImportError("Manca rasterio: installa `pip install rasterio`.")
     for tile_path in tile_paths:
-        expanded.extend(extract_archive_to_tifs(tile_path))
-    if not expanded:
-        raise ValueError("Nessun raster disponibile dopo l'espansione degli archivi")
-    return expanded
+        suffix = tile_path.suffix.casefold()
+        if suffix in TIFF_SUFFIXES:
+            with rasterio.open(tile_path) as ds:
+                yield ds, tile_path.name
+            continue
+        if suffix != ".zip":
+            raise ValueError(f"Formato non supportato: {tile_path}")
+        with zipfile.ZipFile(tile_path) as archive:
+            raster_members = [
+                member
+                for member in archive.namelist()
+                if member.lower().endswith((".tif", ".tiff"))
+            ]
+            if not raster_members:
+                raise ValueError(f"{tile_path.name}: zip senza raster .tif/.tiff")
+            for member in raster_members:
+                with archive.open(member) as handle:
+                    payload = handle.read()
+                with MemoryFile(payload) as memfile:
+                    with memfile.open() as ds:
+                        yield ds, f"{tile_path.name}!{member}"
 
 
 def build_base_summary_from_tiles(
@@ -274,12 +260,10 @@ def build_base_summary_from_tiles(
     if rasterio is None or reproject is None or Resampling is None:
         raise ImportError("Manca rasterio: installa `pip install rasterio`.")
 
-    raster_paths = expand_raster_tile_paths(tile_paths)
     destination = np.full((TARGET_HEIGHT, TARGET_WIDTH), np.nan, dtype=np.float32)
     destination_transform = target_grid_transform()
 
-    for tile_path in raster_paths:
-        with rasterio.open(tile_path) as ds:
+    for ds, source_name in iter_raster_datasets(tile_paths):
             source = ds.read(1).astype(np.float32)
             nodata = ds.nodata
             if valid_range is not None:
