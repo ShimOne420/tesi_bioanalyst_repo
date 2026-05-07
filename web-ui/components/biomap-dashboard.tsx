@@ -5,7 +5,13 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { buildBoundsFromCity, CITY_OPTIONS } from "../lib/cities";
-import type { DatasetMetadata, IndicatorResponse, IndicatorRow, SelectionBounds } from "../lib/types";
+import type {
+  DatasetMetadata,
+  FeatureMetricRow,
+  IndicatorResponse,
+  IndicatorRow,
+  SelectionBounds
+} from "../lib/types";
 
 const EuropeSelectionMap = dynamic(
   () => import("./europe-selection-map").then((mod) => mod.EuropeSelectionMap),
@@ -50,7 +56,23 @@ function formatNumber(value: number | null, unit: string) {
   return `${value.toFixed(2)} ${unit}`;
 }
 
-const TABLE_COLUMNS: Array<{
+function formatPlainNumber(value: number | null, decimals = 2) {
+  if (value === null || Number.isNaN(value)) {
+    return "n.d.";
+  }
+
+  return value.toFixed(decimals);
+}
+
+function formatPercent(value: number | null) {
+  if (value === null || Number.isNaN(value)) {
+    return "n.d.";
+  }
+
+  return `${value.toFixed(2)}%`;
+}
+
+const MONTHLY_TABLE_COLUMNS: Array<{
   label: string;
   value: (row: IndicatorRow) => string | number | null;
   display: (row: IndicatorRow) => string | number;
@@ -68,7 +90,7 @@ const TABLE_COLUMNS: Array<{
   {
     label: "Precipitazioni medie",
     value: (row) => row.precipitation_mean_area_mm,
-    display: (row) => formatNumber(row.precipitation_mean_area_mm, "mm")
+    display: (row) => formatNumber(row.precipitation_mean_area_mm, row.precipitation_unit ?? "mm/mese")
   },
   {
     label: "Celle di terra",
@@ -84,6 +106,73 @@ const TABLE_COLUMNS: Array<{
     label: "Specie osservate",
     value: (row) => row.species_count_observed_area,
     display: (row) => row.species_count_observed_area ?? "n.d."
+  }
+];
+
+const FEATURE_TABLE_COLUMNS: Array<{
+  label: string;
+  value: (row: FeatureMetricRow) => string | number | null;
+  display: (row: FeatureMetricRow) => string | number;
+}> = [
+  {
+    label: "Mese",
+    value: (row) => row.month.slice(0, 7),
+    display: (row) => row.month.slice(0, 7)
+  },
+  {
+    label: "Feature",
+    value: (row) => row.feature_key,
+    display: (row) => row.label
+  },
+  {
+    label: "Unita",
+    value: (row) => row.unit,
+    display: (row) => row.unit
+  },
+  {
+    label: "Predicted mean",
+    value: (row) => row.predicted_mean,
+    display: (row) => formatPlainNumber(row.predicted_mean)
+  },
+  {
+    label: "Observed mean",
+    value: (row) => row.observed_mean,
+    display: (row) => formatPlainNumber(row.observed_mean)
+  },
+  {
+    label: "MAE",
+    value: (row) => row.mae,
+    display: (row) => formatPlainNumber(row.mae)
+  },
+  {
+    label: "RMSE",
+    value: (row) => row.rmse,
+    display: (row) => formatPlainNumber(row.rmse)
+  },
+  {
+    label: "Bias",
+    value: (row) => row.bias,
+    display: (row) => formatPlainNumber(row.bias)
+  },
+  {
+    label: "WAPE",
+    value: (row) => row.wape_pct,
+    display: (row) => formatPercent(row.wape_pct)
+  },
+  {
+    label: "sMAPE",
+    value: (row) => row.smape_pct,
+    display: (row) => formatPercent(row.smape_pct)
+  },
+  {
+    label: "SMAAPE",
+    value: (row) => row.smaape_pct,
+    display: (row) => formatPercent(row.smaape_pct)
+  },
+  {
+    label: "Celle valide",
+    value: (row) => row.valid_cell_count,
+    display: (row) => row.valid_cell_count ?? "n.d."
   }
 ];
 
@@ -129,25 +218,47 @@ function buildExportFilename(result: IndicatorResponse, extension: "csv" | "xls"
   return `biomap_${label}_${result.start.slice(0, 7)}_${result.end.slice(0, 7)}.${extension}`;
 }
 
-function exportTableAsCsv(result: IndicatorResponse) {
-  const header = TABLE_COLUMNS.map((column) => escapeCsvValue(column.label)).join(",");
-  const rows = result.monthly.map((row) =>
-    TABLE_COLUMNS.map((column) => escapeCsvValue(column.value(row))).join(",")
-  );
-  const csv = `\uFEFF${[header, ...rows].join("\r\n")}`;
+function exportRowsAsCsv<T>(
+  result: IndicatorResponse,
+  rows: T[],
+  columns: Array<{ label: string; value: (row: T) => string | number | null }>
+) {
+  const header = columns.map((column) => escapeCsvValue(column.label)).join(",");
+  const csvRows = rows.map((row) => columns.map((column) => escapeCsvValue(column.value(row))).join(","));
+  const csv = `\uFEFF${[header, ...csvRows].join("\r\n")}`;
   downloadBlob(buildExportFilename(result, "csv"), csv, "text/csv;charset=utf-8");
 }
 
-function exportTableAsExcel(result: IndicatorResponse) {
-  const header = TABLE_COLUMNS.map((column) => `<th>${escapeHtmlValue(column.label)}</th>`).join("");
-  const rows = result.monthly
+function exportRowsAsExcel<T>(
+  result: IndicatorResponse,
+  rows: T[],
+  columns: Array<{ label: string; value: (row: T) => string | number | null }>
+) {
+  const header = columns.map((column) => `<th>${escapeHtmlValue(column.label)}</th>`).join("");
+  const tableRows = rows
     .map((row) => {
-      const cells = TABLE_COLUMNS.map((column) => `<td>${escapeHtmlValue(column.value(row))}</td>`).join("");
+      const cells = columns.map((column) => `<td>${escapeHtmlValue(column.value(row))}</td>`).join("");
       return `<tr>${cells}</tr>`;
     })
     .join("");
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8" /></head><body><table><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table></body></html>`;
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8" /></head><body><table><thead><tr>${header}</tr></thead><tbody>${tableRows}</tbody></table></body></html>`;
   downloadBlob(buildExportFilename(result, "xls"), html, "application/vnd.ms-excel;charset=utf-8");
+}
+
+function exportTableAsCsv(result: IndicatorResponse) {
+  if (result.features?.length) {
+    exportRowsAsCsv(result, result.features, FEATURE_TABLE_COLUMNS);
+    return;
+  }
+  exportRowsAsCsv(result, result.monthly, MONTHLY_TABLE_COLUMNS);
+}
+
+function exportTableAsExcel(result: IndicatorResponse) {
+  if (result.features?.length) {
+    exportRowsAsExcel(result, result.features, FEATURE_TABLE_COLUMNS);
+    return;
+  }
+  exportRowsAsExcel(result, result.monthly, MONTHLY_TABLE_COLUMNS);
 }
 
 export function BiomapDashboard() {
@@ -324,6 +435,8 @@ export function BiomapDashboard() {
   }
 
   const latestRow = result?.monthly.at(-1) ?? null;
+  const featureRows = result?.features ?? [];
+  const hasFeatureRows = featureRows.length > 0;
 
   return (
     <main className="page-shell">
@@ -527,7 +640,12 @@ export function BiomapDashboard() {
               </div>
               <div className="stat-card">
                 <span>Precipitazione ultimo mese</span>
-                <strong>{formatNumber(latestRow?.precipitation_mean_area_mm ?? null, "mm")}</strong>
+                <strong>
+                  {formatNumber(
+                    latestRow?.precipitation_mean_area_mm ?? null,
+                    latestRow?.precipitation_unit ?? "mm/mese"
+                  )}
+                </strong>
               </div>
               <div className="stat-card">
                 <span>Specie osservate ultimo mese</span>
@@ -542,9 +660,9 @@ export function BiomapDashboard() {
 
             <div className="panel">
               <div className="panel-inner">
-                <h2 className="section-title">Output mensile</h2>
+                <h2 className="section-title">{hasFeatureRows ? "Feature BIOMAP" : "Output mensile"}</h2>
                 <p className="section-copy">
-                  Tabella mensile dell&apos;area selezionata. Se l&apos;app e collegata al
+                  Tabella dell&apos;area selezionata. Se l&apos;app e collegata al
                   backend locale o a un backend remoto, qui vedrai i dati reali; altrimenti
                   viene mostrata una demo trasparente.
                 </p>
@@ -555,10 +673,10 @@ export function BiomapDashboard() {
 
                 <div className="action-row" style={{ marginBottom: 16 }}>
                   <button className="secondary-button" type="button" onClick={() => exportTableAsCsv(result)}>
-                    Esporta tabella CSV
+                    Esporta CSV
                   </button>
                   <button className="secondary-button" type="button" onClick={() => exportTableAsExcel(result)}>
-                    Esporta tabella Excel
+                    Esporta Excel
                   </button>
 
                   {result.downloads ? (
@@ -577,24 +695,45 @@ export function BiomapDashboard() {
                 </div>
 
                 <div className="table-shell">
-                  <table>
-                    <thead>
-                      <tr>
-                        {TABLE_COLUMNS.map((column) => (
-                          <th key={column.label}>{column.label}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {result.monthly.map((row) => (
-                        <tr key={row.month}>
-                          {TABLE_COLUMNS.map((column) => (
-                            <td key={column.label}>{column.display(row)}</td>
+                  {hasFeatureRows ? (
+                    <table>
+                      <thead>
+                        <tr>
+                          {FEATURE_TABLE_COLUMNS.map((column) => (
+                            <th key={column.label}>{column.label}</th>
                           ))}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {featureRows.map((row) => (
+                          <tr key={`${row.month}-${row.feature_key}`}>
+                            {FEATURE_TABLE_COLUMNS.map((column) => (
+                              <td key={column.label}>{column.display(row)}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <table>
+                      <thead>
+                        <tr>
+                          {MONTHLY_TABLE_COLUMNS.map((column) => (
+                            <th key={column.label}>{column.label}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.monthly.map((row) => (
+                          <tr key={row.month}>
+                            {MONTHLY_TABLE_COLUMNS.map((column) => (
+                              <td key={column.label}>{column.display(row)}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
                 </div>
               </div>
             </div>

@@ -29,8 +29,15 @@ import torch
 import torch.nn.functional as F
 from omegaconf import OmegaConf
 
+from bioanalyst_model_utils import audit_precipitation_source
 from bioanalyst_model_utils import build_selection_parser
 from bioanalyst_model_utils import resolve_city_bounds
+from biomap_metric_utils import (
+    PRECIPITATION_AUDIT,
+    cell_metric_columns,
+    continuous_metric_summary,
+    feature_value_label,
+)
 from biomap_final_workbook import DEFAULT_WORKBOOK_NAME, update_biomap_final_workbook
 from bioanalyst_native_utils import (
     build_native_run_context,
@@ -437,71 +444,21 @@ def export_reliable_feature_plots(
     return outputs
 
 
-def percentage_error_metrics(predicted_values: np.ndarray, observed_values: np.ndarray) -> dict[str, Any]:
-    """Metriche percentuali robuste per celle finite."""
-    pred = np.asarray(predicted_values, dtype=np.float64)
-    obs = np.asarray(observed_values, dtype=np.float64)
-    mask = np.isfinite(pred) & np.isfinite(obs)
-    pred = pred[mask]
-    obs = obs[mask]
-    if pred.size == 0:
-        return {"metric_cell_count": 0, "wape_pct": None, "smaape_pct": None, "smape_pct": None}
-
-    abs_error = np.abs(pred - obs)
-    observed_abs_sum = float(np.sum(np.abs(obs)))
-    wape = None if observed_abs_sum <= 1e-12 else float(np.sum(abs_error) / observed_abs_sum * 100.0)
-
-    symmetric_denominator = np.abs(pred) + np.abs(obs)
-    symmetric_mask = symmetric_denominator > 1e-12
-    symmetric_values = np.zeros_like(abs_error, dtype=np.float64)
-    symmetric_values[symmetric_mask] = 200.0 * abs_error[symmetric_mask] / symmetric_denominator[symmetric_mask]
-    smaape = float(np.mean(symmetric_values)) if symmetric_values.size else None
-
-    return {
-        "metric_cell_count": int(pred.size),
-        "wape_pct": wape,
-        "smaape_pct": smaape,
-        "smape_pct": smaape,
-    }
-
-
-def add_cell_percentage_columns(frame: pd.DataFrame, value_label: str) -> pd.DataFrame:
+def add_cell_percentage_columns(frame: pd.DataFrame, value_label: str, *, group: str, variable: str) -> pd.DataFrame:
     """Aggiunge colonne percentuali cella-per-cella ai matrix."""
     obs_col = f"observed_{value_label}"
     pred_col = f"predicted_{value_label}"
-    abs_col = f"abs_error_{value_label}"
-    if obs_col not in frame or pred_col not in frame or abs_col not in frame:
+    if obs_col not in frame or pred_col not in frame:
         return frame
 
-    predicted = pd.to_numeric(frame[pred_col], errors="coerce").astype(float)
-    observed = pd.to_numeric(frame[obs_col], errors="coerce").astype(float)
-    abs_error = pd.to_numeric(frame[abs_col], errors="coerce").astype(float)
-    finite_mask = np.isfinite(predicted) & np.isfinite(observed)
-
-    observed_abs = observed.abs()
-    with np.errstate(divide="ignore", invalid="ignore"):
-        ape = np.where(finite_mask & (observed_abs > 1e-12), abs_error / observed_abs * 100.0, np.nan)
-        symmetric_denominator = predicted.abs() + observed_abs
-        smaape = np.where(
-            finite_mask & (symmetric_denominator > 1e-12),
-            200.0 * abs_error / symmetric_denominator,
-            np.where(finite_mask & (abs_error <= 1e-12), 0.0, np.nan),
-        )
-
-    observed_abs_sum = float(observed_abs[finite_mask].sum())
-    if observed_abs_sum > 1e-12:
-        wape_contribution = np.where(finite_mask, abs_error / observed_abs_sum * 100.0, np.nan)
-        wape = float(np.nansum(wape_contribution))
-    else:
-        wape_contribution = np.full(len(frame), np.nan)
-        wape = np.nan
-
-    frame["valid_observation"] = finite_mask
-    frame["ape_pct"] = ape
-    frame["wape_pct"] = wape
-    frame["smaape_pct"] = smaape
-    frame["smape_pct"] = smaape
-    frame["wape_contribution_pct"] = wape_contribution
+    columns = cell_metric_columns(
+        pd.to_numeric(frame[pred_col], errors="coerce").to_numpy(dtype=np.float64),
+        pd.to_numeric(frame[obs_col], errors="coerce").to_numpy(dtype=np.float64),
+        group=group,
+        variable=variable,
+    )
+    for column_name, values in columns.items():
+        frame[column_name] = values
     return frame
 
 
@@ -632,37 +589,30 @@ def move_tensors_to_cpu(value: Any) -> Any:
     return value
 
 
-def compute_summary(frame: pd.DataFrame, value_label: str, scope: str) -> dict[str, Any]:
+def compute_summary(frame: pd.DataFrame, value_label: str, scope: str, *, group: str, variable: str) -> dict[str, Any]:
     pred_col = f"predicted_{value_label}"
     obs_col = f"observed_{value_label}"
-    diff_col = f"difference_{value_label}"
-    abs_col = f"abs_error_{value_label}"
+    predicted = pd.to_numeric(frame[pred_col], errors="coerce").to_numpy(dtype=np.float64)
+    finite_pred = predicted[np.isfinite(predicted)]
 
     summary = {
         "scope": scope,
         "cell_count": int(len(frame)),
-        "predicted_mean": float(frame[pred_col].mean()),
-        "predicted_min": float(frame[pred_col].min()),
-        "predicted_max": float(frame[pred_col].max()),
+        "valid_cell_count": 0,
+        "predicted_mean": float(np.mean(finite_pred)) if finite_pred.size else math.nan,
+        "predicted_min": float(np.min(finite_pred)) if finite_pred.size else math.nan,
+        "predicted_max": float(np.max(finite_pred)) if finite_pred.size else math.nan,
     }
     if obs_col in frame and frame[obs_col].notna().any():
-        observed_mean = float(frame[obs_col].mean())
-        mae = float(frame[abs_col].mean())
-        rmse = float(math.sqrt(float((frame[diff_col] ** 2).mean())))
-        bias = float(frame[diff_col].mean())
-        percent_metrics = percentage_error_metrics(frame[pred_col].to_numpy(), frame[obs_col].to_numpy())
-        summary.update(
-            {
-                "observed_mean": observed_mean,
-                "mae": mae,
-                "rmse": rmse,
-                "bias": bias,
-                **percent_metrics,
-                "error_pct_on_abs_observed_mean": None
-                if abs(observed_mean) < 1e-12
-                else float(mae / abs(observed_mean) * 100.0),
-            }
+        metrics = continuous_metric_summary(
+            predicted,
+            pd.to_numeric(frame[obs_col], errors="coerce").to_numpy(dtype=np.float64),
+            group=group,
+            variable=variable,
         )
+        summary.update(metrics)
+        summary["cell_count"] = int(len(frame))
+        summary["error_pct_on_abs_observed_mean"] = metrics["relative_mae_pct"]
     return summary
 
 
@@ -692,7 +642,7 @@ def export_feature_matrix_bundle(
     if predicted_map_raw is not None and observed_map is not None:
         alignment_diagnostic_frame = build_alignment_diagnostic_frame(predicted_map_raw, observed_map)
 
-    value_label = f"{variable}_{unit.replace('°', '').lower()}"
+    value_label = feature_value_label(variable, unit)
     frame = build_cell_frame(
         latitudes=latitudes,
         longitudes=longitudes,
@@ -701,13 +651,13 @@ def export_feature_matrix_bundle(
         bounds=bounds,
         value_label=value_label,
     )
-    frame = add_cell_percentage_columns(frame, value_label)
+    frame = add_cell_percentage_columns(frame, value_label, group=group, variable=variable)
     area_frame = frame[frame["inside_selected_area"]].copy()
-    area_frame = add_cell_percentage_columns(area_frame, value_label)
+    area_frame = add_cell_percentage_columns(area_frame, value_label, group=group, variable=variable)
     summary_frame = pd.DataFrame.from_records(
         [
-            compute_summary(frame, value_label, "full_grid"),
-            compute_summary(area_frame, value_label, "selected_area"),
+            compute_summary(frame, value_label, "full_grid", group=group, variable=variable),
+            compute_summary(area_frame, value_label, "selected_area", group=group, variable=variable),
         ]
     )
     summary_frame["prediction_latitude_flip_applied"] = bool(latitude_flip)
@@ -859,7 +809,7 @@ def export_species_matrix_workbook(
             bounds=manifest["bounds"],
             value_label=value_label,
         )
-        frame = add_cell_percentage_columns(frame, value_label)
+        frame = add_cell_percentage_columns(frame, value_label, group="species", variable=str(species_id))
         frame["species_id"] = species_id
         frame["unit"] = unit
         frame["forecast_month"] = manifest.get("forecast_month")
@@ -871,10 +821,10 @@ def export_species_matrix_workbook(
         frame["input_mode"] = manifest.get("input_mode")
         sheets[f"sp_{species_id}"] = frame
 
-        full_metrics = compute_summary(frame, value_label, "full_grid")
+        full_metrics = compute_summary(frame, value_label, "full_grid", group="species", variable=str(species_id))
         area_frame = frame[frame["inside_selected_area"]].copy()
-        area_frame = add_cell_percentage_columns(area_frame, value_label)
-        area_metrics = compute_summary(area_frame, value_label, "selected_area")
+        area_frame = add_cell_percentage_columns(area_frame, value_label, group="species", variable=str(species_id))
+        area_metrics = compute_summary(area_frame, value_label, "selected_area", group="species", variable=str(species_id))
         binary_full = compute_binary_summary(frame[f"predicted_{value_label}"].to_numpy(), frame[f"observed_{value_label}"].to_numpy())
         binary_area = compute_binary_summary(area_frame[f"predicted_{value_label}"].to_numpy(), area_frame[f"observed_{value_label}"].to_numpy())
         summary_rows.append(
@@ -959,9 +909,10 @@ def build_area_summary_frame(
     for spec in area_specs:
         area_frame = select_area_cells(frame, spec["bounds"])
         area_lat, area_lon = bounds_center(spec["bounds"])
-        summary = compute_summary(area_frame, value_label, spec["area_label"]) if not area_frame.empty else {
+        summary = compute_summary(area_frame, value_label, spec["area_label"], group=group, variable=variable) if not area_frame.empty else {
             "scope": spec["area_label"],
             "cell_count": 0,
+            "valid_cell_count": 0,
         }
         error_pct = summary.get("error_pct_on_abs_observed_mean")
         rows.append(
@@ -1284,7 +1235,25 @@ def main() -> None:
         "attention_chunk_size": args.attention_chunk_size,
         "fast_smoke_test": bool(args.fast_smoke_test),
         "input_mode": args.input_mode,
+        "precipitation_audit": PRECIPITATION_AUDIT,
     }
+    audit_months = [
+        context.months_info["input_prev"],
+        context.months_info["input_last"],
+    ]
+    if compare_month is not None:
+        audit_months.append(compare_month)
+    try:
+        manifest["precipitation_audit"] = audit_precipitation_source(
+            env["source_paths"],
+            audit_months,
+            bounds=manifest.get("bounds"),
+        )
+    except Exception as exc:
+        manifest["precipitation_audit"] = {
+            **PRECIPITATION_AUDIT,
+            "error": str(exc),
+        }
     manifest["spatial_alignment"] = build_spatial_alignment_metadata()
     artifact_paths["manifest"].write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
 

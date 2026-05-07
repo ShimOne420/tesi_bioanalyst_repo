@@ -28,6 +28,8 @@ import numpy as np
 import pandas as pd
 import torch
 
+from biomap_metric_utils import continuous_metric_summary, convert_display_values
+
 
 GROUP_FIELDS = {
     "surface": "surface_variables",
@@ -174,71 +176,8 @@ def align_prediction(map_values: np.ndarray, *, latitude_flip: bool, longitude_f
     return aligned.copy()
 
 
-def convert_display_values(variable: str, values: np.ndarray) -> tuple[np.ndarray, str]:
-    """Conversioni minime per leggere le variabili chiave."""
-    values = values.astype(np.float32)
-    if variable in {"t2m", "d2m"}:
-        return values - 273.15, "degC"
-    if variable == "tp":
-        return values * 1000.0, "mm"
-    return values, "native"
-
-
-def finite_metric_values(predicted: np.ndarray, observed: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    mask = np.isfinite(predicted) & np.isfinite(observed)
-    return predicted[mask].astype(np.float64), observed[mask].astype(np.float64)
-
-
-def compute_metrics(predicted: np.ndarray, observed: np.ndarray) -> dict[str, Any]:
-    pred, obs = finite_metric_values(predicted, observed)
-    if pred.size == 0:
-        return {
-            "cell_count": 0,
-            "predicted_mean": math.nan,
-            "observed_mean": math.nan,
-            "mae": math.nan,
-            "rmse": math.nan,
-            "bias": math.nan,
-            "correlation": math.nan,
-            "predicted_min": math.nan,
-            "predicted_max": math.nan,
-            "observed_min": math.nan,
-            "observed_max": math.nan,
-            "wape_pct": math.nan,
-            "smaape_pct": math.nan,
-            "smape_pct": math.nan,
-            "relative_mae_pct": math.nan,
-        }
-    diff = pred - obs
-    corr = math.nan
-    if pred.size > 1 and float(np.std(pred)) > 0.0 and float(np.std(obs)) > 0.0:
-        corr = float(np.corrcoef(pred, obs)[0, 1])
-    observed_abs_mean = float(abs(np.mean(obs)))
-    observed_abs_sum = float(np.sum(np.abs(obs)))
-    mae = float(np.mean(np.abs(diff)))
-    abs_error = np.abs(diff)
-    symmetric_denominator = np.abs(pred) + np.abs(obs)
-    symmetric_values = np.zeros_like(abs_error, dtype=np.float64)
-    symmetric_mask = symmetric_denominator > 1e-12
-    symmetric_values[symmetric_mask] = 200.0 * abs_error[symmetric_mask] / symmetric_denominator[symmetric_mask]
-    smaape = float(np.mean(symmetric_values))
-    return {
-        "cell_count": int(pred.size),
-        "predicted_mean": float(np.mean(pred)),
-        "observed_mean": float(np.mean(obs)),
-        "mae": mae,
-        "rmse": float(np.sqrt(np.mean(np.square(diff)))),
-        "bias": float(np.mean(diff)),
-        "correlation": corr,
-        "predicted_min": float(np.min(pred)),
-        "predicted_max": float(np.max(pred)),
-        "observed_min": float(np.min(obs)),
-        "observed_max": float(np.max(obs)),
-        "wape_pct": math.nan if observed_abs_sum < 1e-12 else float(np.sum(abs_error) / observed_abs_sum * 100.0),
-        "smaape_pct": smaape,
-        "smape_pct": smaape,
-        "relative_mae_pct": math.nan if observed_abs_mean < 1e-12 else float(mae / observed_abs_mean * 100.0),
-    }
+def compute_metrics(predicted: np.ndarray, observed: np.ndarray, *, group: str, variable: str) -> dict[str, Any]:
+    return continuous_metric_summary(predicted, observed, group=group, variable=variable)
 
 
 def reliability_label(group: str, variable: str, metrics: dict[str, Any]) -> str:
@@ -399,7 +338,7 @@ def variable_metrics_for_run(run_dir: Path, prediction_batch, observed_batch, ma
                 pred_map = align_prediction(pred_map, latitude_flip=lat_flip, longitude_flip=lon_flip)
                 pred_display, unit = convert_display_values(variable, pred_map)
                 obs_display, _ = convert_display_values(variable, obs_map)
-                metrics = compute_metrics(pred_display, obs_display)
+                metrics = compute_metrics(pred_display, obs_display, group=group_name, variable=variable)
                 rows.append(
                     {
                         "run_dir": str(run_dir),
@@ -447,7 +386,7 @@ def species_proxy_metrics(run_dir: Path, prediction_batch, observed_batch, manif
         ("species_count_threshold_0_5", pred_count_05, obs_count_05, "species_count"),
         ("species_count_threshold_0_1", pred_count_01, obs_count_01, "species_count"),
     ]:
-        metrics = compute_metrics(pred_map, obs_map)
+        metrics = compute_metrics(pred_map, obs_map, group="species_proxy", variable=variable)
         rows.append(
             {
                 "run_dir": str(run_dir),
@@ -611,7 +550,26 @@ def create_report(
     lines.append("Interpretazione: la temperatura e' la variabile piu' promettente se il flip nord-sud e' applicato. Va comunque validata contro fonti esterne locali, non solo contro il target BioCube.")
     lines.append("")
     lines.append("### Precipitazione `climate.tp`")
-    lines.append(markdown_table(tp, ["forecast_month", "predicted_mean", "observed_mean", "mae", "rmse", "bias", "correlation", "relative_mae_pct", "reliability"]))
+    lines.append(
+        markdown_table(
+            tp,
+            [
+                "forecast_month",
+                "unit",
+                "valid_cell_count",
+                "predicted_mean",
+                "observed_mean",
+                "mae",
+                "rmse",
+                "bias",
+                "wape_pct",
+                "smape_pct",
+                "correlation",
+                "relative_mae_pct",
+                "reliability",
+            ],
+        )
+    )
     lines.append("")
     lines.append("Interpretazione: la precipitazione e' normalmente piu' difficile della temperatura. Se correlazione e relative MAE sono deboli, va trattata come variabile diagnostica e non ancora come risultato robusto.")
     lines.append("")
@@ -698,12 +656,12 @@ def main() -> None:
     species_sum = core_metrics[(core_metrics["group"] == "species_proxy") & (core_metrics["variable"] == "species_sum_proxy")]
     if not t2m.empty:
         chart_paths["Temperatura t2m - MAE/RMSE"] = chart_dir / "t2m_mae_rmse.png"
-        chart_line(t2m, output_path=chart_paths["Temperatura t2m - MAE/RMSE"], title="Temperatura t2m: MAE e RMSE", y_columns=["mae", "rmse"], ylabel="Errore (degC)")
+        chart_line(t2m, output_path=chart_paths["Temperatura t2m - MAE/RMSE"], title="Temperatura t2m: MAE e RMSE", y_columns=["mae", "rmse"], ylabel="Errore (°C)")
         chart_paths["Temperatura t2m - media predicted vs observed"] = chart_dir / "t2m_predicted_observed_mean.png"
-        chart_line(t2m, output_path=chart_paths["Temperatura t2m - media predicted vs observed"], title="Temperatura t2m: media predicted vs observed", y_columns=["predicted_mean", "observed_mean"], ylabel="Temperatura media (degC)")
+        chart_line(t2m, output_path=chart_paths["Temperatura t2m - media predicted vs observed"], title="Temperatura t2m: media predicted vs observed", y_columns=["predicted_mean", "observed_mean"], ylabel="Temperatura media (°C)")
     if not tp.empty:
         chart_paths["Precipitazione tp - MAE/RMSE"] = chart_dir / "tp_mae_rmse.png"
-        chart_line(tp, output_path=chart_paths["Precipitazione tp - MAE/RMSE"], title="Precipitazione tp: MAE e RMSE", y_columns=["mae", "rmse"], ylabel="Errore (mm)")
+        chart_line(tp, output_path=chart_paths["Precipitazione tp - MAE/RMSE"], title="Precipitazione tp: MAE e RMSE", y_columns=["mae", "rmse"], ylabel="Errore (mm/mese)")
         chart_paths["Precipitazione tp - correlazione"] = chart_dir / "tp_correlation.png"
         chart_bar(tp, output_path=chart_paths["Precipitazione tp - correlazione"], title="Precipitazione tp: correlazione predicted/observed", value_column="correlation", ylabel="Correlazione")
     if not species_sum.empty:

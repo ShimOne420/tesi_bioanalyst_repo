@@ -345,6 +345,8 @@ def compute_area_climate_monthly(cell_df: pd.DataFrame) -> pd.DataFrame:
                 "precipitation_mean_area_mm": float(
                     (frame["precipitation_mean_mm"] * weights).sum() / weights.sum()
                 ),
+                "precipitation_unit": "mm/mese",
+                "precipitation_conversion": "raw_m * 1000",
                 "cell_count_land": int(len(frame)),
                 "cells_with_species_records": int(frame["species_count_observed_cell"].notna().sum()),
             }

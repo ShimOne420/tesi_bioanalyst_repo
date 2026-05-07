@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from biomap_metric_utils import convert_display_values as convert_biomap_display_values
 from bioanalyst_model_utils import (
     BFM_REPO_ROOT,
     PROJECT_ROOT,
@@ -99,12 +100,6 @@ NATIVE_GROUP_FIELDS = {
     "forest": "forest_variables",
     "redlist": "redlist_variables",
     "misc": "misc_variables",
-}
-
-
-DISPLAY_UNIT_RULES = {
-    "t2m": ("°C", lambda values: values - 273.15),
-    "tp": ("mm", lambda values: values * 1000.0),
 }
 
 
@@ -557,10 +552,7 @@ def extract_native_map(tensor: torch.Tensor, *, level_index: int = 0) -> np.ndar
 
 def convert_display_values(variable_name: str, values: np.ndarray) -> tuple[np.ndarray, str]:
     """Converte alcune variabili note in unita più leggibili per grafici e report."""
-    if variable_name in DISPLAY_UNIT_RULES:
-        unit, rule = DISPLAY_UNIT_RULES[variable_name]
-        return rule(values.astype(np.float32)), unit
-    return values.astype(np.float32), "native"
+    return convert_biomap_display_values(variable_name, values)
 
 
 def native_pct_error(predicted: float, observed: float) -> float:

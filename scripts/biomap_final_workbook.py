@@ -26,6 +26,7 @@ DEFAULT_PREVISIONI_DIRNAME = "previsioni"
 DEFAULT_WORKBOOK_NAME = "BIOMAP_FINAL_FEATURE_ANALYSIS_NATIVE_BIOANALYST.xlsx"
 
 import analyze_latest_native_tests as ant  # noqa: E402
+from biomap_metric_utils import PRECIPITATION_AUDIT, continuous_metric_summary  # noqa: E402
 
 
 READY_STATES = {
@@ -51,6 +52,7 @@ VARIABLE_SHEET_COLUMNS = [
     "source_status",
     "reliability",
     "cell_count",
+    "valid_cell_count",
     "predicted_mean",
     "observed_mean",
     "mae",
@@ -383,50 +385,14 @@ def binary_scores(pred: np.ndarray, obs: np.ndarray) -> dict[str, float | int]:
     }
 
 
-def continuous_scores(pred: np.ndarray, obs: np.ndarray) -> dict[str, float | int]:
-    mask = np.isfinite(pred) & np.isfinite(obs)
-    pred = pred[mask].astype(float)
-    obs = obs[mask].astype(float)
-    if pred.size == 0:
-        return {
-            "predicted_mean": math.nan,
-            "observed_mean": math.nan,
-            "mae": math.nan,
-            "rmse": math.nan,
-            "bias": math.nan,
-            "correlation": math.nan,
-            "relative_mae_pct": math.nan,
-            "wape_pct": math.nan,
-            "smaape_pct": math.nan,
-            "smape_pct": math.nan,
-            "cell_count": 0,
-        }
-    diff = pred - obs
-    corr = math.nan
-    if pred.size > 1 and np.std(pred) > 0 and np.std(obs) > 0:
-        corr = float(np.corrcoef(pred, obs)[0, 1])
-    observed_abs_mean = abs(float(np.mean(obs)))
-    observed_abs_sum = float(np.sum(np.abs(obs)))
-    mae = float(np.mean(np.abs(diff)))
-    abs_error = np.abs(diff)
-    symmetric_denominator = np.abs(pred) + np.abs(obs)
-    symmetric_values = np.zeros_like(abs_error, dtype=np.float64)
-    symmetric_mask = symmetric_denominator > 1e-12
-    symmetric_values[symmetric_mask] = 200.0 * abs_error[symmetric_mask] / symmetric_denominator[symmetric_mask]
-    smaape = float(np.mean(symmetric_values))
-    return {
-        "predicted_mean": float(np.mean(pred)),
-        "observed_mean": float(np.mean(obs)),
-        "mae": mae,
-        "rmse": float(np.sqrt(np.mean(diff**2))),
-        "bias": float(np.mean(diff)),
-        "correlation": corr,
-        "relative_mae_pct": math.nan if observed_abs_mean <= 1e-12 else mae / observed_abs_mean * 100.0,
-        "wape_pct": math.nan if observed_abs_sum <= 1e-12 else float(np.sum(abs_error) / observed_abs_sum * 100.0),
-        "smaape_pct": smaape,
-        "smape_pct": smaape,
-        "cell_count": int(pred.size),
-    }
+def continuous_scores(
+    pred: np.ndarray,
+    obs: np.ndarray,
+    *,
+    group: str | None = None,
+    variable: str | None = None,
+) -> dict[str, float | int]:
+    return continuous_metric_summary(pred, obs, group=group, variable=variable)
 
 
 def load_all_metrics(runs: list[Path], current_batches: dict[Path, tuple[Any, Any, dict[str, Any]]] | None = None) -> pd.DataFrame:
@@ -486,7 +452,12 @@ def compute_species_summary(runs: list[Path], current_batches: dict[Path, tuple[
             pred_richness = pred_bin.sum(axis=0)
             obs_richness = obs_bin.sum(axis=0)
             binary = binary_scores(pred_bin, obs_bin)
-            richness = continuous_scores(pred_richness.reshape(-1), obs_richness.reshape(-1))
+            richness = continuous_scores(
+                pred_richness.reshape(-1),
+                obs_richness.reshape(-1),
+                group="species_proxy",
+                variable=f"richness_threshold_{threshold}",
+            )
             rows.append(
                 {
                     "forecast_month": manifest.get("forecast_month"),
@@ -625,6 +596,35 @@ def metric_guide() -> pd.DataFrame:
     )
 
 
+def technical_notes(manifest: dict[str, Any]) -> pd.DataFrame:
+    precipitation = manifest.get("precipitation_audit") or PRECIPITATION_AUDIT
+    return pd.DataFrame(
+        [
+            (
+                "precipitation_unit",
+                precipitation.get("display_unit") or precipitation.get("precipitation_unit_it") or "mm/mese",
+                "Precipitazione mostrata come totale mensile.",
+            ),
+            (
+                "precipitation_conversion",
+                precipitation.get("conversion") or precipitation.get("precipitation_conversion") or "raw_m * 1000",
+                "La stessa conversione viene applicata a predicted e observed.",
+            ),
+            (
+                "precipitation_raw_units",
+                precipitation.get("units"),
+                "Attributo NetCDF letto da climate.tp quando disponibile.",
+            ),
+            (
+                "ndvi_metric_validity",
+                "observed_NDVI_native != 0",
+                "Per vegetation.NDVI le celle observed=0 sono escluse da MAE, RMSE, bias, correlation, WAPE e sMAPE.",
+            ),
+        ],
+        columns=["topic", "value", "note"],
+    )
+
+
 def coverage_from_metrics(metrics: pd.DataFrame) -> pd.DataFrame:
     if metrics.empty:
         return pd.DataFrame(columns=["year", "n_months", "months"])
@@ -747,6 +747,7 @@ def update_biomap_final_workbook(
     sheets["Dashboard_BIOMAP"] = dashboard
     sheets["BIOMAP_Indicator_Map"] = indicator_map
     sheets["Metric_Guide"] = metric_guide()
+    sheets["Technical_Notes"] = technical_notes(manifest)
     sheets["Coverage"] = coverage
     sheets["Temperature_t2m"] = filter_metrics(all_metrics, lambda frame: (frame["group"] == "climate") & (frame["variable"] == "t2m"))
     sheets["Precipitation_tp"] = filter_metrics(all_metrics, lambda frame: (frame["group"] == "climate") & (frame["variable"] == "tp"))

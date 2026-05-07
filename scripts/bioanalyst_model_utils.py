@@ -476,6 +476,56 @@ def open_model_domain_dataset(path: Path, months: list[pd.Timestamp] | None = No
     return cropped
 
 
+def audit_precipitation_source(
+    source_paths: dict[str, Path],
+    months: list[pd.Timestamp],
+    bounds: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """Read ERA5 tp metadata and raw ranges before display conversion."""
+
+    def raw_stats(values: xr.DataArray) -> dict[str, float | int]:
+        raw = np.asarray(values.values, dtype=np.float64)
+        finite = raw[np.isfinite(raw)]
+        if finite.size == 0:
+            return {"count": 0, "min": math.nan, "mean": math.nan, "max": math.nan}
+        return {
+            "count": int(finite.size),
+            "min": float(np.min(finite)),
+            "mean": float(np.mean(finite)),
+            "max": float(np.max(finite)),
+        }
+
+    path = source_paths["climate_a"]
+    with xr.open_dataset(path, engine="netcdf4") as ds:
+        cropped = crop_model_domain(ds)
+        positions = resolve_time_positions(cropped, months)
+        tp = squeeze_common_dims(cropped["tp"].isel(valid_time=positions)).load()
+        valid_time = [
+            str(pd.Timestamp(value).to_period("M").to_timestamp().date())
+            for value in tp["valid_time"].values
+        ]
+        area_stats = None
+        if bounds is not None:
+            area = tp.sel(
+                latitude=slice(bounds["max_lat"], bounds["min_lat"]),
+                longitude=slice(bounds["min_lon"], bounds["max_lon"]),
+            )
+            area_stats = raw_stats(area)
+        attrs = dict(cropped["tp"].attrs)
+
+    return {
+        "source_path": str(path),
+        "variable": "climate.tp",
+        "units": attrs.get("units"),
+        "long_name": attrs.get("long_name") or attrs.get("standard_name"),
+        "valid_time": valid_time,
+        "raw_domain_stats": raw_stats(tp),
+        "raw_selected_area_stats": area_stats,
+        "display_unit": "mm/mese",
+        "conversion": "raw_m * 1000",
+    }
+
+
 # Ricaviamo le coordinate finali del dominio 160x280 usato dal modello senza caricare tutte le variabili.
 def load_model_grid(source_paths: dict[str, Path]) -> tuple[np.ndarray, np.ndarray]:
     with xr.open_dataset(source_paths["surface"], engine="netcdf4") as ds:
@@ -1548,6 +1598,8 @@ def summarize_batch_for_area(batch, bounds: dict[str, float], species_threshold:
     return {
         "temperature_mean_area_c": float(np.nansum(temperature * weights_2d) / np.nansum(weights_2d)),
         "precipitation_mean_area_mm": float(np.nansum(precipitation * weights_2d) / np.nansum(weights_2d)),
+        "precipitation_unit": "mm/mese",
+        "precipitation_conversion": "raw_m * 1000",
         "species_count_area_proxy": int(species_present),
         "max_species_signal_area": float(max(max_species_signal) if max_species_signal else 0.0),
         "cell_count_land_proxy": int(lat_mask.sum() * lon_mask.sum()),
@@ -1600,6 +1652,8 @@ def build_comparison_frame(
             "kind": "predicted",
             "temperature_mean_area_c": predicted_summary["temperature_mean_area_c"],
             "precipitation_mean_area_mm": predicted_summary["precipitation_mean_area_mm"],
+            "precipitation_unit": predicted_summary.get("precipitation_unit", "mm/mese"),
+            "precipitation_conversion": predicted_summary.get("precipitation_conversion", "raw_m * 1000"),
             "species_count_area_proxy": predicted_summary["species_count_area_proxy"],
             "max_species_signal_area": predicted_summary["max_species_signal_area"],
             "area_bounds": json.dumps(bounds),
@@ -1614,6 +1668,8 @@ def build_comparison_frame(
                 "kind": "observed_next_month",
                 "temperature_mean_area_c": observed_summary["temperature_mean_area_c"],
                 "precipitation_mean_area_mm": observed_summary["precipitation_mean_area_mm"],
+                "precipitation_unit": observed_summary.get("precipitation_unit", "mm/mese"),
+                "precipitation_conversion": observed_summary.get("precipitation_conversion", "raw_m * 1000"),
                 "species_count_area_proxy": observed_summary["species_count_area_proxy"],
                 "max_species_signal_area": observed_summary["max_species_signal_area"],
                 "area_bounds": json.dumps(bounds),

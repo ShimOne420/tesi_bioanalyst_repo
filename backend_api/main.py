@@ -184,12 +184,46 @@ def read_monthly_csv(path: Path) -> list[dict[str, Any]]:
                     "month": row["month"],
                     "temperature_mean_area_c": parse_float(row["temperature_mean_area_c"]),
                     "precipitation_mean_area_mm": parse_float(row["precipitation_mean_area_mm"]),
+                    "precipitation_unit": row.get("precipitation_unit") or "mm/mese",
                     "cell_count_land": parse_int(row["cell_count_land"]),
                     "cells_with_species_records": parse_int(row["cells_with_species_records"]),
                     "species_count_observed_area": parse_int(row["species_count_observed_area"]),
                 }
             )
         return rows
+
+
+def build_feature_rows_from_monthly(monthly: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    feature_specs = [
+        ("t2m", "Temperatura 2m", "°C", "temperature_mean_area_c"),
+        ("tp", "Precipitazione totale", "mm/mese", "precipitation_mean_area_mm"),
+        ("NDVI", "NDVI", "native", None),
+        ("swvl1", "SWVL1", "native", None),
+        ("swvl2", "SWVL2", "native", None),
+        ("Cropland", "Cropland", "native", None),
+    ]
+    rows: list[dict[str, Any]] = []
+    for monthly_row in monthly:
+        for feature_key, label, unit, observed_column in feature_specs:
+            observed_mean = monthly_row.get(observed_column) if observed_column else None
+            rows.append(
+                {
+                    "month": monthly_row["month"],
+                    "feature_key": feature_key,
+                    "label": label,
+                    "unit": unit,
+                    "predicted_mean": None,
+                    "observed_mean": observed_mean,
+                    "mae": None,
+                    "rmse": None,
+                    "bias": None,
+                    "wape_pct": None,
+                    "smape_pct": None,
+                    "smaape_pct": None,
+                    "valid_cell_count": monthly_row.get("cell_count_land") if observed_column else None,
+                }
+            )
+    return rows
 
 
 # Deriviamo i file di output generati per una certa label in modo coerente tra API e UI.
@@ -289,6 +323,7 @@ def run_indicator_job(body: dict[str, Any]) -> dict[str, Any]:
 
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     monthly = read_monthly_csv(csv_path)
+    features = build_feature_rows_from_monthly(monthly)
 
     return {
         "status": "ok",
@@ -304,6 +339,7 @@ def run_indicator_job(body: dict[str, Any]) -> dict[str, Any]:
         "start": summary["start"],
         "end": summary["end"],
         "monthly": monthly,
+        "features": features,
         "notes": [summary["species_note"]],
         "downloads": {
             "csvUrl": f"/api/download/{label_slug}/csv",
