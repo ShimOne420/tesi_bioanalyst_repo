@@ -9,7 +9,12 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
 
-from bioanalyst_model_utils import latest_monthly_column, months_after_table_coverage, resolve_forecast_months  # noqa: E402
+from bioanalyst_model_utils import (  # noqa: E402
+    latest_monthly_column,
+    months_after_table_coverage,
+    ndvi_table_covers_months,
+    resolve_forecast_months,
+)
 
 
 class ForecastMonthsTest(unittest.TestCase):
@@ -42,6 +47,9 @@ class ForecastMonthsTest(unittest.TestCase):
                 "NDVI",
             )
         )
+
+    def test_missing_ndvi_source_does_not_claim_coverage(self) -> None:
+        self.assertFalse(ndvi_table_covers_months({}, [pd.Timestamp("2022-06-01")]))
 
 
 if __name__ == "__main__":

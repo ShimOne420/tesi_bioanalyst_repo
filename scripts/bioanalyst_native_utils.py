@@ -404,6 +404,7 @@ def save_native_one_step_artifacts(
         "raw_batch_target": str(result.saved_windows["target_window"]) if "target_window" in result.saved_windows else None,
         "target_input_mode": target_input_mode,
         "target_observed_uses_real_optional_layers": result.saved_windows.get("target_observed_uses_real_optional_layers"),
+        "target_observed_requires_real_ndvi": result.saved_windows.get("target_observed_requires_real_ndvi"),
         "native_prediction_original": str(predicted_path),
         "native_target_original": str(observed_path) if observed_path else None,
         "checkpoint_diagnostics": runtime.checkpoint_diagnostics,

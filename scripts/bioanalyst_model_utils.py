@@ -454,6 +454,55 @@ def climate_last_available_month(source_paths: dict[str, Path], *, use_atmospher
     return min(availability.values())
 
 
+def vegetation_dynamic_source_score(path: Path) -> tuple[int, pd.Timestamp, int] | None:
+    """Valuta una sorgente vegetation dinamica senza assumere che l'estensione sia `.nc`."""
+    try:
+        with xr.open_dataset(path, engine="netcdf4") as ds:
+            variables = {str(name).casefold() for name in ds.data_vars}
+            has_ndvi = bool({"ndvi"}.intersection(variables))
+            has_lai = {"lai_hv", "lai_lv"}.issubset(variables)
+            if not has_ndvi and not has_lai:
+                return None
+            if "valid_time" in ds.coords:
+                times = pd.to_datetime(ds["valid_time"].values)
+                max_time = pd.Timestamp(times.max()).to_period("M").to_timestamp() if len(times) else pd.Timestamp.min
+            else:
+                max_time = pd.Timestamp.min
+    except Exception:
+        return None
+
+    signal_score = 2 if has_ndvi else 1
+    return signal_score, max_time, int(path.stat().st_size)
+
+
+def resolve_vegetation_dynamic_source_path(default_path: Path) -> Path | None:
+    """Sceglie il miglior file vegetation dinamico locale, incluso `.nc.bak` se e' quello completo."""
+    candidates: list[Path] = []
+    override = os.getenv("BIOCUBE_VEGETATION_DYNAMIC_PATH") or os.getenv("BIOCUBE_VEGETATION_PATH")
+    if override:
+        candidates.append(Path(override).expanduser())
+
+    candidates.append(default_path)
+    candidates.append(default_path.with_name(f"{default_path.name}.bak"))
+    if default_path.parent.exists():
+        candidates.extend(sorted(default_path.parent.glob("data_stream*.nc*")))
+
+    scored: list[tuple[tuple[int, pd.Timestamp, int], Path]] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        candidate = candidate.expanduser()
+        if candidate in seen or not candidate.exists() or not candidate.is_file():
+            continue
+        seen.add(candidate)
+        score = vegetation_dynamic_source_score(candidate)
+        if score is not None:
+            scored.append((score, candidate))
+
+    if not scored:
+        return default_path if default_path.exists() else None
+    return max(scored, key=lambda item: item[0])[1]
+
+
 # Risolviamo i path dei file sorgente raw realmente usati nella costruzione dei batch.
 def resolve_source_paths(biocube_dir: Path) -> dict[str, Path]:
     resolved = {}
@@ -465,6 +514,13 @@ def resolve_source_paths(biocube_dir: Path) -> dict[str, Path]:
                 resolved[key] = ndvi_path
                 if ndvi_path != path:
                     print(f"  [info] Uso sorgente NDVI alternativa: {ndvi_path}", flush=True)
+                continue
+        if key == "land_vegetation_dynamic":
+            vegetation_path = resolve_vegetation_dynamic_source_path(path)
+            if vegetation_path is not None:
+                resolved[key] = vegetation_path
+                if vegetation_path != path:
+                    print(f"  [info] Uso sorgente vegetation dinamica alternativa: {vegetation_path}", flush=True)
                 continue
         if not path.exists():
             if key in OPTIONAL_MODEL_SOURCE_KEYS:
@@ -965,6 +1021,23 @@ def months_after_table_coverage(months: list[pd.Timestamp], columns: list[str], 
     return max(to_month_start(month) for month in months) > latest
 
 
+def ndvi_latest_available_month(source_paths: dict[str, Path]) -> pd.Timestamp | None:
+    ndvi_path = source_paths.get("land_ndvi_csv")
+    if ndvi_path is None:
+        return None
+    try:
+        return latest_monthly_column(read_ndvi_columns(ndvi_path), "NDVI")
+    except (OSError, ValueError, pd.errors.EmptyDataError, pd.errors.ParserError):
+        return None
+
+
+def ndvi_table_covers_months(source_paths: dict[str, Path], months: list[pd.Timestamp]) -> bool:
+    latest = ndvi_latest_available_month(source_paths)
+    if latest is None:
+        return False
+    return max(to_month_start(month) for month in months) <= latest
+
+
 def build_vegetation_group_from_ndvi_csv(
     ndvi_path: Path,
     months: list[pd.Timestamp],
@@ -1436,18 +1509,28 @@ def save_window_batches(
         # Il target e' osservazione/validazione: anche quando il forecast gira in
         # input-mode clean, proviamo a costruirlo con i layer reali disponibili.
         target_input_mode = "all"
+        target_requires_real_ndvi = ndvi_table_covers_months(source_paths, target_months)
+        if not target_requires_real_ndvi:
+            latest_ndvi = ndvi_latest_available_month(source_paths)
+            latest_label = latest_ndvi.strftime("%Y-%m") if latest_ndvi is not None else "non disponibile"
+            print(
+                "  [warn] Target observed oltre la copertura NDVI reale "
+                f"(ultimo NDVI tabellare: {latest_label}); "
+                "costruisco comunque il target climatico e marchio NDVI come non valido.",
+                flush=True,
+            )
         try:
             target_batch = build_raw_batch_for_months(
                 source_paths,
                 target_months,
                 use_atmospheric_data=use_atmospheric_data,
                 input_mode=target_input_mode,
-                require_real_ndvi=True,
+                require_real_ndvi=target_requires_real_ndvi,
             )
         except Exception as exc:
             raise RuntimeError(
                 "Target observed non costruibile con vegetation/agriculture/forest reali. "
-                "Mi fermo per evitare un NDVI osservato placeholder a zero. "
+                "Mi fermo per evitare un observed ambiguo. "
                 "Controlla `Land/Europe_ndvi_monthly_un_025.csv` e il fallback "
                 "`Copernicus/ERA5-monthly/era5-land-vegetation/data_stream-moda.nc` "
                 f"per i mesi {', '.join(month.strftime('%Y-%m') for month in target_months)}."
@@ -1459,6 +1542,7 @@ def save_window_batches(
         results["target_window"] = target_path
         results["target_input_mode"] = target_input_mode
         results["target_observed_uses_real_optional_layers"] = target_input_mode == "all"
+        results["target_observed_requires_real_ndvi"] = bool(target_requires_real_ndvi)
     return results
 
 
