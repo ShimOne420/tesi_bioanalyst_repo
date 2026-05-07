@@ -475,6 +475,12 @@ def prepare_native_forecast_environment():
     model_dir = require_path("BIOANALYST_MODEL_DIR")
     project_output_dir = require_path("PROJECT_OUTPUT_DIR", create=True)
     source_paths = resolve_source_paths(biocube_dir)
+    print(f"[env] BIOCUBE_DIR: {biocube_dir}", flush=True)
+    print(f"[env] NDVI source: {source_paths.get('land_ndvi_csv', 'non trovata')}", flush=True)
+    print(
+        f"[env] vegetation dynamic source: {source_paths.get('land_vegetation_dynamic', 'non trovata')}",
+        flush=True,
+    )
     return {
         "biocube_dir": biocube_dir,
         "model_dir": model_dir,

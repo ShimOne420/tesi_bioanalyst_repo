@@ -207,15 +207,47 @@ def resolve_ndvi_source_path(biocube_dir: Path, default_path: Path) -> Path | No
                 if candidate.suffix.casefold() in {".csv", ".xlsx", ".xls"}
             )
 
+    for root in collect_search_roots("BIOCUBE_NDVI_SEARCH_ROOTS", "BIOCUBE_SEARCH_ROOTS"):
+        if not root.exists():
+            continue
+        for pattern in ("Europe*ndvi*", "*ndvi_monthly*"):
+            candidates.extend(
+                candidate
+                for candidate in sorted(root.rglob(pattern))
+                if candidate.is_file() and candidate.suffix.casefold() in {".csv", ".xlsx", ".xls"}
+            )
+
     seen = set()
+    existing_candidates: list[Path] = []
     for candidate in candidates:
         key = str(candidate)
         if key in seen:
             continue
         seen.add(key)
         if candidate.exists() and candidate.is_file():
-            return candidate
+            existing_candidates.append(candidate)
+
+    scored_candidates = [
+        (score, candidate)
+        for candidate in existing_candidates
+        if (score := ndvi_source_score(candidate)) is not None
+    ]
+    if scored_candidates:
+        return max(scored_candidates, key=lambda item: item[0])[1]
+    if existing_candidates:
+        return existing_candidates[0]
     return None
+
+
+def collect_search_roots(*env_names: str) -> list[Path]:
+    """Legge liste di root separate da `;`, adatte anche a path Windows tipo `F:\\...`."""
+    roots: list[Path] = []
+    for env_name in env_names:
+        raw_value = os.getenv(env_name)
+        if not raw_value:
+            continue
+        roots.extend(Path(item.strip()).expanduser() for item in raw_value.split(";") if item.strip())
+    return roots
 
 
 # Verifichiamo un path di ambiente e lo trasformiamo in Path.
@@ -486,6 +518,9 @@ def resolve_vegetation_dynamic_source_path(default_path: Path) -> Path | None:
     candidates.append(default_path.with_name(f"{default_path.name}.bak"))
     if default_path.parent.exists():
         candidates.extend(sorted(default_path.parent.glob("data_stream*.nc*")))
+    for root in collect_search_roots("BIOCUBE_VEGETATION_SEARCH_ROOTS", "BIOCUBE_SEARCH_ROOTS"):
+        if root.exists():
+            candidates.extend(sorted(root.rglob("data_stream*.nc*")))
 
     scored: list[tuple[tuple[int, pd.Timestamp, int], Path]] = []
     seen: set[Path] = set()
@@ -1012,6 +1047,17 @@ def latest_monthly_column(columns: list[str], variable_name: str) -> pd.Timestam
         if (parsed := parse_month_from_column_name(str(column), variable_name)) is not None
     ]
     return max(months) if months else None
+
+
+def ndvi_source_score(path: Path) -> tuple[pd.Timestamp, int] | None:
+    """Ordina candidate NDVI preferendo copertura temporale piu recente e file piu grande."""
+    try:
+        latest = latest_monthly_column(read_ndvi_columns(path), "NDVI")
+    except (OSError, ValueError, pd.errors.EmptyDataError, pd.errors.ParserError):
+        return None
+    if latest is None:
+        return None
+    return latest, int(path.stat().st_size)
 
 
 def months_after_table_coverage(months: list[pd.Timestamp], columns: list[str], variable_name: str) -> bool:
