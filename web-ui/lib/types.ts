@@ -55,7 +55,7 @@ export type DownloadLinks = {
 
 export type IndicatorResponse = {
   status: "ok";
-  sourceMode: "local" | "proxy" | "demo";
+  sourceMode: "local" | "proxy";
   label: string;
   selectionMode: "city" | "bbox";
   bounds: SelectionBounds;

@@ -25,7 +25,7 @@ Per evitare confusione nella UI principale:
 
 - `predicted` non viene mostrato nella vista osservativa;
 - `features` non viene restituito da `/api/indicators`;
-- il mock/demo usa lo stesso schema osservativo del backend reale;
+- il frontend usa solo il backend reale configurato con `PYTHON_API_BASE_URL`;
 - i tipi forecast restano separati per una futura sezione dedicata.
 
 Nota sulle metriche future: nello stato precedente `SMAPE` e `SMAAPE` erano duplicati nella UI. Quando la sezione forecast verra ripresa, dovra avere una spiegazione separata e metriche adatte alle singole variabili, evitando percentuali fuorvianti sulla temperatura in gradi Celsius.

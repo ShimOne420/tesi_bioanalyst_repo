@@ -1,29 +1,29 @@
 import { NextResponse } from "next/server";
 
-import { CITY_OPTIONS } from "../../../lib/cities";
-
 export const runtime = "nodejs";
 
 export async function GET() {
   try {
-    if (process.env.PYTHON_API_BASE_URL) {
-      const forwarded = await fetch(`${process.env.PYTHON_API_BASE_URL}/api/metadata`, {
-        method: "GET",
-        cache: "no-store"
-      });
+    const backendBaseUrl = process.env.PYTHON_API_BASE_URL;
 
-      const payload = await forwarded.json();
-      return NextResponse.json(payload, { status: forwarded.status });
+    if (!backendBaseUrl) {
+      return NextResponse.json(
+        {
+          error:
+            "Backend reale non configurato: imposta PYTHON_API_BASE_URL in web-ui/.env.local e avvia FastAPI."
+        },
+        { status: 503 }
+      );
     }
 
-    return NextResponse.json({
-      period: {
-        minMonth: "2000-01",
-        maxMonth: "2020-06"
-      },
-      cities: CITY_OPTIONS,
-      note: "Modalita demo: metadata locale non disponibile, sto usando un range predefinito."
+    const forwarded = await fetch(`${backendBaseUrl}/api/metadata`, {
+      method: "GET",
+      cache: "no-store"
     });
+
+    const responseText = await forwarded.text();
+    const payload = responseText ? JSON.parse(responseText) : {};
+    return NextResponse.json(payload, { status: forwarded.status });
   } catch (error) {
     return NextResponse.json(
       {

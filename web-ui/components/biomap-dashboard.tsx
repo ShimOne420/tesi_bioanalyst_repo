@@ -532,7 +532,7 @@ export function BiomapDashboard() {
         {result ? (
           <>
             {result.notes.length ? (
-              <div className={`status ${result.sourceMode === "demo" ? "info" : "info"}`}>
+              <div className="status info">
                 {result.notes.map((note) => (
                   <div key={note}>{note}</div>
                 ))}

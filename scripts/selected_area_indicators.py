@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Calcola i tre indicatori minimi per un'area selezionata e un periodo.
+"""Calcola gli indicatori osservativi per un'area selezionata e un periodo.
 
 Questo è lo script unico pensato come backend del progetto:
 
@@ -427,7 +427,7 @@ def resolve_selection(args: argparse.Namespace) -> tuple[str, dict[str, float], 
     return "bbox", bounds, label
 
 
-# Carichiamo i tre file sorgente fondamentali direttamente da BioCube.
+# Risolviamo i file sorgente osservativi direttamente da BioCube.
 def resolve_source_paths(biocube_dir: Path) -> dict[str, Path]:
     return {
         "species": biocube_dir / "Species" / "europe_species.parquet",

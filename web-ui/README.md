@@ -21,10 +21,9 @@ La vista principale e descritta nel dettaglio in:
 
 ## Architettura
 
-La UI usa `Next.js`, mentre la route API interna `/api/indicators` supporta due modalita:
+La UI usa `Next.js`, mentre le route API interne inoltrano le richieste al backend Python/FastAPI configurato con `PYTHON_API_BASE_URL`.
 
-1. `proxy locale o remoto` verso un backend Python/FastAPI se configuri `PYTHON_API_BASE_URL`
-2. `demo` trasparente se nessun backend e disponibile
+Non esiste piu un fallback demo: senza backend configurato la UI restituisce errore, cosi i risultati visualizzati sono sempre dati reali calcolati dalla pipeline Python.
 
 Le route principali usate dalla UI sono:
 
@@ -47,7 +46,7 @@ Per usare i dati reali in locale crea `web-ui/.env.local` con:
 PYTHON_API_BASE_URL=http://127.0.0.1:8000
 ```
 
-In questo modo la route API inoltra la richiesta al backend `FastAPI` locale.
+In questo modo la route API inoltra la richiesta al backend `FastAPI` locale. Se questa variabile manca, `/api/metadata`, `/api/indicators` e i download non usano dati finti: rispondono con errore di configurazione.
 
 ## Stack locale consigliato
 
@@ -107,4 +106,4 @@ Nota importante:
 
 - il deploy su Vercel, da solo, non puo leggere il dataset locale che sta su `Archivio`
 - per avere output reali online serve un backend dati esterno oppure un endpoint proxy configurato con `PYTHON_API_BASE_URL`
-- senza backend configurato l'app resta comunque navigabile e mostra una modalita demo esplicita
+- senza backend configurato l'app non calcola indicatori e non mostra risultati demo

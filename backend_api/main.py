@@ -101,7 +101,7 @@ def get_biocube_dir() -> Path:
     return path
 
 
-# Restituiamo i path delle tre sorgenti minime usate dagli indicatori.
+# Restituiamo i path delle sorgenti BioCube usate dagli indicatori osservativi.
 def get_source_paths() -> dict[str, Path]:
     biocube_dir = get_biocube_dir()
     return {
@@ -157,8 +157,16 @@ def get_dataset_metadata() -> dict[str, Any]:
     finally:
         ds_prec.close()
 
-    common_start = max(species_min, temp_min, prec_min)
-    common_end = min(species_max, temp_max, prec_max)
+    ds_edaphic = xr.open_dataset(source_paths["edaphic"])
+    try:
+        edaphic_times = pd.to_datetime(ds_edaphic["valid_time"].values)
+        edaphic_min = edaphic_times.min().to_period("M").to_timestamp()
+        edaphic_max = edaphic_times.max().to_period("M").to_timestamp()
+    finally:
+        ds_edaphic.close()
+
+    common_start = max(species_min, temp_min, prec_min, edaphic_min)
+    common_end = min(species_max, temp_max, prec_max, edaphic_max)
 
     return {
         "period": {
@@ -177,6 +185,10 @@ def get_dataset_metadata() -> dict[str, Any]:
             "precipitation": {
                 "minMonth": prec_min.strftime("%Y-%m"),
                 "maxMonth": prec_max.strftime("%Y-%m"),
+            },
+            "edaphic": {
+                "minMonth": edaphic_min.strftime("%Y-%m"),
+                "maxMonth": edaphic_max.strftime("%Y-%m"),
             },
         },
         "cities": load_city_catalog(),

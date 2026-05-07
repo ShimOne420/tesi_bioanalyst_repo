@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 
-import { createDemoResponse } from "../../../lib/mock-response";
 import type { SelectionBounds } from "../../../lib/types";
 
 export const runtime = "nodejs";
@@ -20,6 +19,7 @@ type RequestBody = {
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as RequestBody;
+    const backendBaseUrl = process.env.PYTHON_API_BASE_URL;
 
     if (!body.start || !body.end) {
       return NextResponse.json({ error: "Periodo mancante." }, { status: 400 });
@@ -33,38 +33,28 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Bounding box mancante." }, { status: 400 });
     }
 
-    if (process.env.PYTHON_API_BASE_URL) {
-      const forwarded = await fetch(`${process.env.PYTHON_API_BASE_URL}/api/indicators`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
+    if (!backendBaseUrl) {
+      return NextResponse.json(
+        {
+          error:
+            "Backend reale non configurato: imposta PYTHON_API_BASE_URL in web-ui/.env.local e avvia FastAPI."
         },
-        body: JSON.stringify(body)
-      });
-
-      const payload = await forwarded.json();
-      return NextResponse.json(payload, { status: forwarded.status });
+        { status: 503 }
+      );
     }
 
-    const demoBounds =
-      body.selectionMode === "bbox" && body.bounds
-        ? body.bounds
-        : {
-            minLat: 44.9642,
-            maxLat: 45.9642,
-            minLon: 8.69,
-            maxLon: 9.69
-          };
+    const forwarded = await fetch(`${backendBaseUrl}/api/indicators`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body),
+      cache: "no-store"
+    });
 
-    return NextResponse.json(
-      createDemoResponse({
-        label: body.label ?? body.city ?? "selected_area",
-        selectionMode: body.selectionMode,
-        bounds: demoBounds,
-        startMonth: body.start.slice(0, 7),
-        endMonth: body.end.slice(0, 7)
-      })
-    );
+    const responseText = await forwarded.text();
+    const payload = responseText ? JSON.parse(responseText) : {};
+    return NextResponse.json(payload, { status: forwarded.status });
   } catch (error) {
     return NextResponse.json(
       {
