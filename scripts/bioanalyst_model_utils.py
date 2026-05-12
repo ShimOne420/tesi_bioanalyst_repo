@@ -30,6 +30,11 @@ from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import OmegaConf
 
+try:
+    import rasterio
+except ImportError:  # pragma: no cover
+    rasterio = None
+
 from minimum_indicator_utils import (
     build_bbox_from_point,
     normalize_longitude,
@@ -237,6 +242,70 @@ def resolve_ndvi_source_path(biocube_dir: Path, default_path: Path) -> Path | No
     if existing_candidates:
         return existing_candidates[0]
     return None
+
+
+def parse_month_dir_name(value: str) -> pd.Timestamp | None:
+    match = re.fullmatch(r"(?P<year>\d{4})_(?P<month>\d{2})", str(value).strip())
+    if not match:
+        return None
+    year = int(match.group("year"))
+    month = int(match.group("month"))
+    if 1 <= month <= 12:
+        return pd.Timestamp(year=year, month=month, day=1)
+    return None
+
+
+def ndvi_tiff_root_score(root: Path) -> tuple[pd.Timestamp, int] | None:
+    if not root.exists() or not root.is_dir():
+        return None
+    months = [
+        parsed
+        for child in root.iterdir()
+        if child.is_dir() and (parsed := parse_month_dir_name(child.name)) is not None
+    ]
+    if not months:
+        return None
+    return max(months), len(months)
+
+
+def resolve_ndvi_monthly_tiff_root() -> Path | None:
+    """Trova la root dei TIFF NDVI mensili gia riallineati alla griglia BioCube."""
+    candidates: list[Path] = []
+    for env_name in (
+        "BIOCUBE_NDVI_TIFF_ROOT",
+        "NDVI_TIFF_ROOT",
+        "NDVI_MONTHLY_TIFF_ROOT",
+        "NDVI_STAGING_ROOT",
+    ):
+        env_value = os.getenv(env_name)
+        if env_value:
+            candidates.append(Path(env_value).expanduser())
+
+    default_root = PROJECT_ROOT / "data" / "staging" / "ndvi" / "monthly_2020_2026"
+    ndvi_root = PROJECT_ROOT / "data" / "staging" / "ndvi"
+    candidates.extend([default_root, ndvi_root])
+
+    for root in collect_search_roots("BIOCUBE_NDVI_TIFF_SEARCH_ROOTS", "BIOCUBE_SEARCH_ROOTS"):
+        if root.exists():
+            candidates.append(root)
+            candidates.extend(sorted(root.rglob("monthly_*")))
+
+    scored: list[tuple[tuple[pd.Timestamp, int], Path]] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if not candidate.exists() or not candidate.is_dir():
+            continue
+        score = ndvi_tiff_root_score(candidate)
+        if score is not None:
+            scored.append((score, candidate))
+
+    if not scored:
+        return None
+    return max(scored, key=lambda item: item[0])[1]
 
 
 def collect_search_roots(*env_names: str) -> list[Path]:
@@ -1067,7 +1136,17 @@ def months_after_table_coverage(months: list[pd.Timestamp], columns: list[str], 
     return max(to_month_start(month) for month in months) > latest
 
 
-def ndvi_latest_available_month(source_paths: dict[str, Path]) -> pd.Timestamp | None:
+def ndvi_latest_available_tiff_month() -> pd.Timestamp | None:
+    root = resolve_ndvi_monthly_tiff_root()
+    if root is None:
+        return None
+    score = ndvi_tiff_root_score(root)
+    if score is None:
+        return None
+    return score[0]
+
+
+def ndvi_latest_available_table_month(source_paths: dict[str, Path]) -> pd.Timestamp | None:
     ndvi_path = source_paths.get("land_ndvi_csv")
     if ndvi_path is None:
         return None
@@ -1077,11 +1156,97 @@ def ndvi_latest_available_month(source_paths: dict[str, Path]) -> pd.Timestamp |
         return None
 
 
+def ndvi_latest_available_month(source_paths: dict[str, Path]) -> pd.Timestamp | None:
+    candidates = [
+        latest
+        for latest in (
+            ndvi_latest_available_tiff_month(),
+            ndvi_latest_available_table_month(source_paths),
+        )
+        if latest is not None
+    ]
+    if not candidates:
+        return None
+    return max(candidates)
+
+
 def ndvi_table_covers_months(source_paths: dict[str, Path], months: list[pd.Timestamp]) -> bool:
     latest = ndvi_latest_available_month(source_paths)
     if latest is None:
         return False
     return max(to_month_start(month) for month in months) <= latest
+
+
+def resolve_ndvi_biocube_tiff_path(root: Path, month: pd.Timestamp) -> Path:
+    month = to_month_start(month)
+    ym = month.strftime("%Y_%m")
+    month_dir = root / ym
+    candidates = [
+        month_dir / f"ndvi_{ym}_biocube_{MODEL_WIDTH}x{MODEL_HEIGHT}.tif",
+        month_dir / f"ndvi_{ym}_biocube.tif",
+    ]
+    if month_dir.exists():
+        candidates.extend(sorted(month_dir.glob(f"ndvi_{ym}_biocube_*.tif")))
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    raise FileNotFoundError(
+        f"TIFF NDVI BioCube non trovato per {month:%Y-%m} sotto {root}. "
+        f"Atteso almeno {month_dir / f'ndvi_{ym}_biocube_{MODEL_WIDTH}x{MODEL_HEIGHT}.tif'}"
+    )
+
+
+def validate_ndvi_biocube_tiff(ds: "rasterio.io.DatasetReader", month: pd.Timestamp) -> None:
+    expected_bounds = (
+        float(MODEL_BOUNDS["min_lon"]),
+        float(MODEL_BOUNDS["min_lat"]),
+        float(MODEL_BOUNDS["max_lon"]),
+        float(MODEL_BOUNDS["max_lat"]),
+    )
+    bounds = tuple(round(float(value), 6) for value in ds.bounds)
+    rounded_expected = tuple(round(value, 6) for value in expected_bounds)
+    if (ds.width, ds.height) != (MODEL_WIDTH, MODEL_HEIGHT):
+        raise ValueError(
+            f"TIFF NDVI con shape inattesa per {month:%Y-%m}: {(ds.width, ds.height)} "
+            f"invece di {(MODEL_WIDTH, MODEL_HEIGHT)}"
+        )
+    if bounds != rounded_expected:
+        raise ValueError(
+            f"TIFF NDVI con bounds inattesi per {month:%Y-%m}: {bounds} "
+            f"invece di {rounded_expected}"
+        )
+    if ds.crs is None or str(ds.crs) != "EPSG:4326":
+        raise ValueError(f"TIFF NDVI con CRS inatteso per {month:%Y-%m}: {ds.crs}")
+
+
+def load_ndvi_month_from_biocube_tiff(tiff_path: Path, month: pd.Timestamp) -> torch.Tensor:
+    if rasterio is None:
+        raise ImportError("Manca rasterio: installa `pip install rasterio`.")
+    with rasterio.open(tiff_path) as ds:
+        validate_ndvi_biocube_tiff(ds, month)
+        array = ds.read(1).astype(np.float32)
+        nodata = ds.nodata
+        if nodata is not None:
+            array = np.where(np.isclose(array, float(nodata)), np.nan, array)
+        array = np.where(np.isfinite(array), array, 0.0).astype(np.float32)
+    return require_ndvi_month_signal(
+        torch.from_numpy(array),
+        month,
+        f"NDVI TIFF BioCube {tiff_path.name}",
+    )
+
+
+def build_vegetation_group_from_ndvi_tiffs(
+    ndvi_root: Path,
+    months: list[pd.Timestamp],
+) -> dict[str, torch.Tensor]:
+    print(f"  [debug] Leggo NDVI da TIFF BioCube mensili: {ndvi_root}", flush=True)
+    maps = []
+    for month in months:
+        tiff_path = resolve_ndvi_biocube_tiff_path(ndvi_root, month)
+        print(f"  [debug] Uso TIFF NDVI {tiff_path.name} per {month:%Y-%m}", flush=True)
+        maps.append(load_ndvi_month_from_biocube_tiff(tiff_path, month))
+    return {"NDVI": torch.stack(maps)}
 
 
 def build_vegetation_group_from_ndvi_csv(
@@ -1260,8 +1425,22 @@ def build_vegetation_group_from_sources(
     longitudes: np.ndarray,
     require_real_ndvi: bool = False,
 ) -> dict[str, torch.Tensor]:
-    """Preferisce il CSV NDVI ufficiale BioCube; altrimenti usa la sorgente LAI locale."""
-    allow_missing_future_ndvi = False
+    """Preferisce i TIFF NDVI BioCube mensili, poi il CSV, poi LAI come proxy."""
+    allow_missing_future_ndvi = not ndvi_table_covers_months(source_paths, months)
+    real_ndvi_errors: list[str] = []
+
+    ndvi_tiff_root = resolve_ndvi_monthly_tiff_root()
+    if ndvi_tiff_root is not None:
+        print(f"  [debug] Provo a caricare NDVI da TIFF mensili: {ndvi_tiff_root}", flush=True)
+        try:
+            return build_vegetation_group_from_ndvi_tiffs(ndvi_tiff_root, months)
+        except (FileNotFoundError, ValueError, OSError, ImportError) as exc:
+            real_ndvi_errors.append(f"TIFF mensili: {exc}")
+            print(
+                f"  [warn] TIFF NDVI non utilizzabili per i mesi richiesti ({exc}); provo tabella CSV/Excel",
+                flush=True,
+            )
+
     if "land_ndvi_csv" in source_paths:
         ndvi_csv_path = source_paths["land_ndvi_csv"]
         print(f"  [debug] Provo a caricare NDVI da tabella: {ndvi_csv_path}", flush=True)
@@ -1272,35 +1451,33 @@ def build_vegetation_group_from_sources(
         try:
             return build_vegetation_group_from_ndvi_csv(ndvi_csv_path, months, latitudes, longitudes)
         except (KeyError, ValueError, OSError, pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
-            try:
-                allow_missing_future_ndvi = months_after_table_coverage(
-                    months,
-                    read_ndvi_columns(ndvi_csv_path),
-                    "NDVI",
-                )
-            except (OSError, ValueError, pd.errors.EmptyDataError, pd.errors.ParserError):
-                allow_missing_future_ndvi = False
-
-            if require_real_ndvi and not allow_missing_future_ndvi:
-                raise RuntimeError(
-                    "Target observed richiede NDVI reale, ma la tabella NDVI non e' utilizzabile "
-                    f"per i mesi {', '.join(month.strftime('%Y-%m') for month in months)}: {exc}"
-                ) from exc
-            if require_real_ndvi and allow_missing_future_ndvi:
-                print(
-                    "  [warn] Target observed oltre la copertura della tabella NDVI; "
-                    "continuo l'inference e marchero NDVI come non disponibile.",
-                    flush=True,
-                )
+            real_ndvi_errors.append(f"tabella NDVI: {exc}")
             print(f"  [warn] Tabella NDVI non utilizzabile per i mesi richiesti ({exc}); provo fallback LAI", flush=True)
     else:
         message = (
             "`land_ndvi_csv` non presente in source_paths. "
             "Atteso `Land/Europe_ndvi_monthly_un_025.csv` oppure imposta BIOCUBE_NDVI_PATH."
         )
-        if require_real_ndvi:
-            raise FileNotFoundError(message)
+        real_ndvi_errors.append(message)
         print(f"  [debug] {message} Chiavi: {list(source_paths.keys())}", flush=True)
+
+    if require_real_ndvi and allow_missing_future_ndvi:
+        latest_ndvi = ndvi_latest_available_month(source_paths)
+        latest_label = latest_ndvi.strftime("%Y-%m") if latest_ndvi is not None else "non disponibile"
+        print(
+            "  [warn] Target observed oltre la copertura dell'NDVI reale "
+            f"(ultimo NDVI disponibile: {latest_label}); "
+            "continuo l'inference e marchero NDVI come non disponibile.",
+            flush=True,
+        )
+
+    if require_real_ndvi and not allow_missing_future_ndvi:
+        raise RuntimeError(
+            "Target observed richiede NDVI reale, ma nessuna sorgente NDVI utilizzabile e' disponibile "
+            f"per i mesi {', '.join(month.strftime('%Y-%m') for month in months)}. "
+            f"Dettagli: {' | '.join(real_ndvi_errors)}"
+        )
+
     print(f"  [debug] Uso fallback LAI da NetCDF", flush=True)
     try:
         return build_vegetation_group(
@@ -1337,10 +1514,10 @@ def build_native_group_source_status(*, use_atmospheric_data: bool, input_mode: 
         forest_status = "placeholder_zero_clean_input_mode"
         land_vegetation_status = "skipped_clean_input_mode"
     else:
-        vegetation_status = "real_ndvi_csv_if_available_else_lai_proxy"
+        vegetation_status = "prefer_ndvi_tiff_then_csv_else_lai_proxy"
         agriculture_status = "real_from_europe_agriculture_csv"
         forest_status = "real_from_europe_forest_csv"
-        land_vegetation_status = "prefer_land_ndvi_csv_else_lai_proxy"
+        land_vegetation_status = "prefer_land_ndvi_tiff_then_csv_else_lai_proxy"
 
     return {
         "surface": "real",
@@ -1561,7 +1738,7 @@ def save_window_batches(
             latest_label = latest_ndvi.strftime("%Y-%m") if latest_ndvi is not None else "non disponibile"
             print(
                 "  [warn] Target observed oltre la copertura NDVI reale "
-                f"(ultimo NDVI tabellare: {latest_label}); "
+                f"(ultimo NDVI disponibile: {latest_label}); "
                 "costruisco comunque il target climatico e marchio NDVI come non valido.",
                 flush=True,
             )
@@ -1577,7 +1754,8 @@ def save_window_batches(
             raise RuntimeError(
                 "Target observed non costruibile con vegetation/agriculture/forest reali. "
                 "Mi fermo per evitare un observed ambiguo. "
-                "Controlla `Land/Europe_ndvi_monthly_un_025.csv` e il fallback "
+                "Controlla i TIFF NDVI mensili sotto `data/staging/ndvi/monthly_2020_2026`, "
+                "la tabella `Land/Europe_ndvi_monthly_un_025.csv` e il fallback "
                 "`Copernicus/ERA5-monthly/era5-land-vegetation/data_stream-moda.nc` "
                 f"per i mesi {', '.join(month.strftime('%Y-%m') for month in target_months)}."
             ) from exc
