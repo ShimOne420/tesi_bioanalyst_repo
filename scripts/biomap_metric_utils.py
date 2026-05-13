@@ -81,12 +81,15 @@ def continuous_metric_summary(
             "wape_pct": math.nan,
             "smaape_pct": math.nan,
             "smape_pct": math.nan,
+            "rmae_pct": math.nan,
+            "cvrmse_pct": math.nan,
             "relative_mae_pct": math.nan,
         }
 
     diff = pred - obs
     abs_error = np.abs(diff)
     mae = float(np.mean(abs_error))
+    rmse = float(np.sqrt(np.mean(np.square(diff))))
     corr = math.nan
     if valid_count > 1 and float(np.std(pred)) > 0.0 and float(np.std(obs)) > 0.0:
         corr = float(np.corrcoef(pred, obs)[0, 1])
@@ -106,7 +109,7 @@ def continuous_metric_summary(
         "predicted_mean": float(np.mean(pred)),
         "observed_mean": float(np.mean(obs)),
         "mae": mae,
-        "rmse": float(np.sqrt(np.mean(np.square(diff)))),
+        "rmse": rmse,
         "bias": float(np.mean(diff)),
         "correlation": corr,
         "predicted_min": float(np.min(pred)),
@@ -116,6 +119,8 @@ def continuous_metric_summary(
         "wape_pct": math.nan if observed_abs_sum <= eps else float(np.sum(abs_error) / observed_abs_sum * 100.0),
         "smaape_pct": smaape,
         "smape_pct": smaape,
+        "rmae_pct": math.nan if observed_abs_mean <= eps else float(mae / observed_abs_mean * 100.0),
+        "cvrmse_pct": math.nan if observed_abs_mean <= eps else float(rmse / observed_abs_mean * 100.0),
         "relative_mae_pct": math.nan if observed_abs_mean <= eps else float(mae / observed_abs_mean * 100.0),
     }
 
@@ -147,12 +152,20 @@ def cell_metric_columns(
     smaape[zero_symmetric_mask] = 0.0
 
     observed_abs_sum = float(np.sum(observed_abs[valid]))
+    observed_abs_mean = float(abs(np.mean(obs[valid]))) if np.any(valid) else math.nan
     wape_contribution = np.full(pred.shape, np.nan, dtype=np.float64)
     if observed_abs_sum > eps:
         wape_contribution[valid] = abs_error[valid] / observed_abs_sum * 100.0
         wape = float(np.nansum(wape_contribution))
     else:
         wape = math.nan
+    if np.any(valid):
+        rmse = float(np.sqrt(np.mean(np.square(pred[valid] - obs[valid]))))
+        rmae = math.nan if observed_abs_mean <= eps else float(np.mean(abs_error[valid]) / observed_abs_mean * 100.0)
+        cvrmse = math.nan if observed_abs_mean <= eps else float(rmse / observed_abs_mean * 100.0)
+    else:
+        rmae = math.nan
+        cvrmse = math.nan
 
     return {
         "valid_observation": valid.astype(bool),
@@ -161,6 +174,8 @@ def cell_metric_columns(
         "wape_contribution_pct": wape_contribution,
         "smaape_pct": smaape,
         "smape_pct": smaape,
+        "rmae_pct": rmae,
+        "cvrmse_pct": cvrmse,
     }
 
 

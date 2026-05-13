@@ -86,11 +86,17 @@ def build_parser():
     return parser
 
 
-def get_batch_variable_map(batch, *, group_name: str, variable_name: str) -> tuple[np.ndarray, str]:
+def get_batch_variable_map(
+    batch,
+    *,
+    group_name: str,
+    variable_name: str,
+    level_index: int = 0,
+) -> tuple[np.ndarray, str]:
     group = get_native_group(batch, group_name)
     if variable_name not in group:
         raise SystemExit(f"Variabile `{variable_name}` non trovata nel gruppo `{group_name}`.")
-    raw_map = extract_native_map(group[variable_name])
+    raw_map = extract_native_map(group[variable_name], level_index=level_index)
     return convert_display_values(variable_name, raw_map)
 
 

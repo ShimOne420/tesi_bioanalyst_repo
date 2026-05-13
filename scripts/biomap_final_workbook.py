@@ -25,10 +25,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from biomap_curated_features import CURATED_BIOMAP_FEATURES
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_FORECAST_ROOT = REPO_ROOT / "outputs" / "local_preview" / "model_forecast"
 DEFAULT_PREVISIONI_DIRNAME = "previsioni"
 DEFAULT_CHART_DIRNAME = "chart"
+DEFAULT_AREA_ANALYSIS_DIRNAME = "area_analysis"
 DEFAULT_WORKBOOK_NAME = "FINAL_FEATURES_ANALYSIS.xlsx"
 
 import analyze_latest_native_tests as ant  # noqa: E402
@@ -72,7 +75,8 @@ VARIABLE_SHEET_COLUMNS = [
     "wape_pct",
     "smaape_pct",
     "smape_pct",
-    "relative_mae_pct",
+    "rmae_pct",
+    "cvrmse_pct",
     "source_report_year",
     "source_report_path",
     "forecast_month_dt",
@@ -152,6 +156,15 @@ FEATURE_METADATA = {
         "main_caution": "Puo essere quasi statico nel tempo.",
         "next_step": "Documentare la frequenza di aggiornamento del layer.",
     },
+    ("atmospheric", "q"): {
+        "biomap_domain": "atmospheric_moisture",
+        "biomap_use": "diagnostic",
+        "biomap_interpretation": "Atmospheric moisture support",
+        "thesis_role": "diagnostic climate variable",
+        "recommended_use_in_thesis": "Usare come diagnostica atmosferica di supporto.",
+        "main_caution": "La lettura dipende dal livello di pressione usato nel curated export.",
+        "next_step": "Documentare esplicitamente il level_index nel workbook finale.",
+    },
     ("edaphic", "swvl1"): {
         "biomap_domain": "soil_water_stress",
         "biomap_use": "diagnostic",
@@ -169,6 +182,33 @@ FEATURE_METADATA = {
         "recommended_use_in_thesis": "Usare come indicatore di stress idrico piu profondo.",
         "main_caution": "Puo reagire in modo piu lento rispetto a swvl1.",
         "next_step": "Confrontare prestazioni per stagioni e aree climatiche diverse.",
+    },
+    ("edaphic", "stl1"): {
+        "biomap_domain": "soil_temperature",
+        "biomap_use": "diagnostic",
+        "biomap_interpretation": "Shallow soil temperature support",
+        "thesis_role": "soil temperature indicator",
+        "recommended_use_in_thesis": "Usare per leggere la temperatura del suolo superficiale.",
+        "main_caution": "Richiede confronto stagionale coerente e contesto climatico.",
+        "next_step": "Confrontare il segnale con t2m e con il contesto del suolo.",
+    },
+    ("edaphic", "stl2"): {
+        "biomap_domain": "soil_temperature",
+        "biomap_use": "diagnostic",
+        "biomap_interpretation": "Deeper soil temperature support",
+        "thesis_role": "soil temperature indicator",
+        "recommended_use_in_thesis": "Usare per leggere la temperatura del suolo piu profonda.",
+        "main_caution": "Puo rispondere con inerzia maggiore rispetto a stl1.",
+        "next_step": "Analizzare differenze temporali tra stl1 e stl2.",
+    },
+    ("climate", "avg_snlwrf"): {
+        "biomap_domain": "surface_radiation_balance",
+        "biomap_use": "diagnostic",
+        "biomap_interpretation": "Surface net long-wave radiation support",
+        "thesis_role": "radiation diagnostic variable",
+        "recommended_use_in_thesis": "Usare come variabile radiativa di supporto ai trend climatici.",
+        "main_caution": "Piu difficile da comunicare da sola come indicatore finale.",
+        "next_step": "Legarla ai trend di temperatura, umidita e suolo nelle analisi.",
     },
     ("land", "Land"): {
         "biomap_domain": "land_mask_context",
@@ -266,6 +306,10 @@ def default_chart_root(runs_root: Path) -> Path:
     return output_root_from_runs_root(runs_root) / DEFAULT_CHART_DIRNAME
 
 
+def default_area_analysis_root(runs_root: Path) -> Path:
+    return output_root_from_runs_root(runs_root) / DEFAULT_AREA_ANALYSIS_DIRNAME
+
+
 def iter_run_dirs(root: Path) -> list[Path]:
     run_dirs: list[Path] = []
     for manifest_path in sorted(root.rglob("forecast_native_manifest.json")):
@@ -348,7 +392,9 @@ def readiness(group: str, variable: str, mae: float, bias: float, corr: float, r
         return "diagnostic_promising" if corr >= 0.70 else "diagnostic_uncertain"
     if group in {"forest", "agriculture", "redlist"}:
         return "context_spatially_consistent" if corr >= 0.70 else "context_uncertain"
-    if group in {"edaphic", "misc"}:
+    if group in {"edaphic", "misc", "atmospheric"}:
+        return "diagnostic_spatially_consistent" if corr >= 0.75 else "diagnostic_uncertain"
+    if group == "climate":
         return "diagnostic_spatially_consistent" if corr >= 0.75 else "diagnostic_uncertain"
     return "native_metric_only"
 
@@ -371,7 +417,7 @@ def add_biomap_columns(frame: pd.DataFrame) -> pd.DataFrame:
                 float(row.get("mae", math.nan)),
                 float(row.get("bias", math.nan)),
                 float(row.get("correlation", math.nan)),
-                float(row.get("relative_mae_pct", math.nan)),
+                float(row.get("rmae_pct", row.get("relative_mae_pct", math.nan))),
             )
         )
     output["biomap_domain"] = domains
@@ -507,7 +553,8 @@ def compute_species_summary(runs: list[Path], current_batches: dict[Path, tuple[
                     "richness_wape_pct": richness["wape_pct"],
                     "richness_smaape_pct": richness["smaape_pct"],
                     "richness_smape_pct": richness["smape_pct"],
-                    "richness_relative_mae_pct": richness["relative_mae_pct"],
+                    "richness_rmae_pct": richness["rmae_pct"],
+                    "richness_cvrmse_pct": richness["cvrmse_pct"],
                     "richness_cell_count": richness["cell_count"],
                     "biomap_readiness": "exploratory_not_final",
                     "biomap_use": "exploratory_species",
@@ -562,7 +609,8 @@ def build_dashboard(metrics: pd.DataFrame) -> pd.DataFrame:
                 "mean_r2_corr_squared": float(group_frame["r2_corr_squared"].mean()),
                 "mean_wape_pct": float(group_frame["wape_pct"].mean()),
                 "mean_smape_pct": float(group_frame["smape_pct"].mean()),
-                "mean_relative_mae_pct": float(group_frame["relative_mae_pct"].mean()),
+                "mean_rmae_pct": float(group_frame["rmae_pct"].mean()),
+                "mean_cvrmse_pct": float(group_frame["cvrmse_pct"].mean()),
                 "ready_or_usable_months": int(len(ready_months)),
                 "readiness_ratio": math.nan if n_months == 0 else float(len(ready_months) / n_months),
             }
@@ -600,6 +648,8 @@ def build_indicator_map(dashboard: pd.DataFrame) -> pd.DataFrame:
                 "mean_rmse": row["mean_rmse"],
                 "mean_wape_pct": row["mean_wape_pct"],
                 "mean_smape_pct": row["mean_smape_pct"],
+                "mean_rmae_pct": row["mean_rmae_pct"],
+                "mean_cvrmse_pct": row["mean_cvrmse_pct"],
                 "mean_bias": row["mean_bias"],
                 "mean_corr": row["mean_corr"],
                 "readiness_ratio": row["readiness_ratio"],
@@ -623,7 +673,8 @@ def metric_guide() -> pd.DataFrame:
             ("correlation", "Correlazione di Pearson tra predetto e osservato.", "Pattern spaziali o strutturali", "Alta correlazione non implica valori assoluti corretti."),
             ("WAPE", "100 * somma(|predetto - osservato|) / somma(|osservato|).", "Errore percentuale aggregato", "Non definito se la somma degli osservati assoluti e zero."),
             ("sMAPE", "Media di 200 * |predetto - osservato| / (|predetto| + |osservato|).", "Errore percentuale simmetrico", "Limitato a 0-200%, ma puo essere severo vicino a zero."),
-            ("relative_mae_pct", "100 * MAE / abs(media osservata).", "Confronti percentuali tra variabili", "Instabile se la media osservata e vicina a zero."),
+            ("RMAE", "100 * MAE / abs(media osservata).", "Confronti percentuali tra variabili", "Instabile se la media osservata e vicina a zero."),
+            ("CVRMSE", "100 * RMSE / abs(media osservata).", "Confronti percentuali tra variabili", "Instabile se la media osservata e vicina a zero."),
             ("tp", "True positives: presenze correttamente previste.", "Specie / binario", "Dipende dalla soglia scelta."),
             ("fp", "False positives: presenze previste ma non osservate.", "Specie / binario", "Troppi fp indicano sovrastima delle presenze."),
             ("fn", "False negatives: presenze osservate ma non previste.", "Specie / binario", "Troppi fn indicano omissione del segnale biologico."),
@@ -686,18 +737,127 @@ def filter_metrics(frame: pd.DataFrame, predicate: Callable[[pd.DataFrame], pd.S
     return output.reset_index(drop=True)
 
 
-CHART_VARIABLE_SPECS = [
-    ("climate", "t2m", "t2m"),
-    ("climate", "tp", "tp"),
-    ("vegetation", "NDVI", "NDVI"),
-    ("edaphic", "swvl1", "swvl1"),
-    ("edaphic", "swvl2", "swvl2"),
-    ("agriculture", "Cropland", "Cropland"),
-]
+def filter_curated_feature_metrics(frame: pd.DataFrame, feature: dict[str, Any]) -> pd.DataFrame:
+    output = frame[
+        (frame["group"] == feature["group"])
+        & (frame["variable"] == feature["variable"])
+    ].copy()
+    if "level_index" in feature:
+        output = output[output["level_index"] == feature["level_index"]].copy()
+    return output.reset_index(drop=True)
 
 
-def chart_metric_frame(metrics: pd.DataFrame, *, group: str, variable: str) -> pd.DataFrame:
-    frame = metrics[(metrics["group"] == group) & (metrics["variable"] == variable)].copy()
+def ensure_area_analysis_scaffold(runs_root: Path) -> dict[str, str]:
+    area_root = default_area_analysis_root(runs_root)
+    area_root.mkdir(parents=True, exist_ok=True)
+    schema_path = area_root / "_schema.json"
+    schema_payload = {
+        "status": "reserved_for_future_frontend_and_analysis_pipeline",
+        "observed_monthly_wide_columns": [
+            "month",
+            "t2m_mean_area",
+            "tp_mean_area",
+            "NDVI_mean_area",
+            "swvl1_mean_area",
+            "swvl2_mean_area",
+            "q_mean_area",
+            "Forest_mean_area",
+            "Arable_mean_area",
+            "Cropland_mean_area",
+            "avg_snlwrf_mean_area",
+            "stl1_mean_area",
+            "stl2_mean_area",
+        ],
+        "forecast_monthly_metrics_long_columns": [
+            "month",
+            "feature_key",
+            "group",
+            "variable",
+            "level_index",
+            "unit",
+            "predicted_mean",
+            "observed_mean",
+            "mae",
+            "rmse",
+            "correlation",
+            "wape_pct",
+            "smape_pct",
+            "rmae_pct",
+            "cvrmse_pct",
+            "valid_cell_count",
+        ],
+        "notes": [
+            "Scaffold preparato per analisi area-level e futuro collegamento frontend.",
+            "Nessuna modifica frontend viene applicata in questa fase.",
+        ],
+    }
+    schema_path.write_text(json.dumps(schema_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {
+        "root": str(area_root),
+        "schema": str(schema_path),
+    }
+
+
+def build_native_output_index(run_dirs: list[Path], runs_root: Path) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    output_root = output_root_from_runs_root(runs_root)
+    previsioni_root = output_root / DEFAULT_PREVISIONI_DIRNAME
+    for run_dir in run_dirs:
+        manifest_path = run_dir / "forecast_native_manifest.json"
+        manifest = load_json(manifest_path)
+        forecast_month_ts = safe_timestamp(manifest.get("forecast_month"))
+        month_label = forecast_month_ts.strftime("%Y-%m") if forecast_month_ts is not None else ""
+        previsioni_month_root = previsioni_root / month_label if month_label else None
+        selected_group = str((manifest.get("lab_export") or {}).get("group") or "")
+        selected_variable = str((manifest.get("lab_export") or {}).get("variable") or "")
+        selected_plot_dir = previsioni_month_root / "plot" / selected_variable if previsioni_month_root and selected_variable else None
+        selected_matrix_path = (
+            previsioni_month_root / "cell_matrix" / f"{selected_variable}_cell_matrix.xlsx"
+            if previsioni_month_root and selected_variable
+            else None
+        )
+        species_matrix_path = (
+            previsioni_month_root / "species" / "species_cell_matrix.xlsx"
+            if previsioni_month_root
+            else None
+        )
+        native_full_xlsx = run_dir / "exports" / "bioanalyst_native_full_output.xlsx"
+        native_group_csv_dir = run_dir / "exports" / "bioanalyst_native_full_output_group_csv"
+        native_group_xlsx_dir = run_dir / "exports" / "bioanalyst_native_full_output_group_xlsx"
+        rows.append(
+            {
+                "run_dir": str(run_dir),
+                "label": run_label(manifest, run_dir),
+                "forecast_month": manifest.get("forecast_month"),
+                "manifest_path": str(manifest_path),
+                "native_prediction_original": manifest.get("native_prediction_original") or str(run_dir / "native_prediction_original.pt"),
+                "native_target_original": manifest.get("native_target_original") or str(run_dir / "native_target_original.pt"),
+                "native_full_xlsx": str(native_full_xlsx) if native_full_xlsx.exists() else None,
+                "native_group_csv_dir": str(native_group_csv_dir) if native_group_csv_dir.exists() else None,
+                "native_group_xlsx_dir": str(native_group_xlsx_dir) if native_group_xlsx_dir.exists() else None,
+                "selected_group": selected_group,
+                "selected_variable": selected_variable,
+                "previsioni_month_dir": str(previsioni_month_root) if previsioni_month_root else None,
+                "selected_plot_dir": str(selected_plot_dir) if selected_plot_dir and selected_plot_dir.exists() else None,
+                "selected_matrix_xlsx": str(selected_matrix_path) if selected_matrix_path and selected_matrix_path.exists() else None,
+                "reliable_plot_root": str(previsioni_month_root / "plot") if previsioni_month_root and (previsioni_month_root / "plot").exists() else None,
+                "reliable_cell_matrix_root": str(previsioni_month_root / "cell_matrix") if previsioni_month_root and (previsioni_month_root / "cell_matrix").exists() else None,
+                "species_matrix_xlsx": str(species_matrix_path) if species_matrix_path and species_matrix_path.exists() else None,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+CHART_VARIABLE_SPECS = CURATED_BIOMAP_FEATURES
+
+
+def curated_metric_frame(metrics: pd.DataFrame, *, feature: dict[str, Any]) -> pd.DataFrame:
+    frame = metrics[
+        (metrics["group"] == feature["group"])
+        & (metrics["variable"] == feature["variable"])
+    ].copy()
+    if "level_index" in feature:
+        frame = frame[frame["level_index"] == feature["level_index"]].copy()
     if frame.empty:
         return frame
     frame["forecast_month_dt"] = pd.to_datetime(frame["forecast_month"], errors="coerce")
@@ -709,6 +869,8 @@ def chart_metric_frame(metrics: pd.DataFrame, *, group: str, variable: str) -> p
         "correlation",
         "wape_pct",
         "smape_pct",
+        "rmae_pct",
+        "cvrmse_pct",
     ]
     aggregated = (
         frame.groupby("forecast_month_dt", dropna=False)[numeric_columns]
@@ -771,7 +933,17 @@ def save_yearly_summary_chart(frame: pd.DataFrame, *, output_path: Path, title: 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     yearly = (
         frame.groupby("year", dropna=False)[
-            ["predicted_mean", "observed_mean", "mae", "rmse", "wape_pct", "smape_pct", "correlation"]
+            [
+                "predicted_mean",
+                "observed_mean",
+                "mae",
+                "rmse",
+                "wape_pct",
+                "smape_pct",
+                "correlation",
+                "rmae_pct",
+                "cvrmse_pct",
+            ]
         ]
         .mean(numeric_only=True)
         .reset_index()
@@ -780,7 +952,7 @@ def save_yearly_summary_chart(frame: pd.DataFrame, *, output_path: Path, title: 
     if yearly.empty:
         return
     x_labels = [str(int(year)) for year in yearly["year"].tolist()]
-    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
+    fig, axes = plt.subplots(3, 2, figsize=(13, 12))
     fig.suptitle(title)
 
     axes[0, 0].plot(x_labels, yearly["predicted_mean"], marker="o", linewidth=2, label="predicted_mean")
@@ -805,6 +977,14 @@ def save_yearly_summary_chart(frame: pd.DataFrame, *, output_path: Path, title: 
     axes[1, 1].set_title("Correlation")
     axes[1, 1].grid(True, alpha=0.25)
 
+    axes[2, 0].plot(x_labels, yearly["rmae_pct"], marker="o", linewidth=2, label="RMAE")
+    axes[2, 0].plot(x_labels, yearly["cvrmse_pct"], marker="o", linewidth=2, label="CVRMSE")
+    axes[2, 0].set_title("RMAE and CVRMSE")
+    axes[2, 0].grid(True, alpha=0.25)
+    axes[2, 0].legend()
+
+    axes[2, 1].axis("off")
+
     for axis in axes.flat:
         axis.tick_params(axis="x", rotation=45)
     fig.tight_layout()
@@ -814,16 +994,19 @@ def save_yearly_summary_chart(frame: pd.DataFrame, *, output_path: Path, title: 
 
 def generate_feature_chart_artifacts(metrics: pd.DataFrame, *, chart_root: Path) -> dict[str, dict[str, str]]:
     outputs: dict[str, dict[str, str]] = {}
-    for group, variable, folder_name in CHART_VARIABLE_SPECS:
-        frame = chart_metric_frame(metrics, group=group, variable=variable)
+    for feature in CHART_VARIABLE_SPECS:
+        frame = curated_metric_frame(metrics, feature=feature)
         if frame.empty:
             continue
+        variable = str(feature["variable"])
+        folder_name = str(feature["chart_folder"])
         variable_root = chart_root / folder_name
         observed_vs_predicted_path = variable_root / "observed_vs_predicted_by_month.png"
         mae_rmse_path = variable_root / "mae_rmse_by_month.png"
         wape_smape_path = variable_root / "wape_smape_by_month.png"
         correlation_path = variable_root / "correlation_by_month.png"
         yearly_summary_path = variable_root / "yearly_summary.png"
+        rmae_cvrmse_path = variable_root / "rmae_cvrmse_by_month.png"
 
         save_multi_line_chart(
             frame,
@@ -853,6 +1036,13 @@ def generate_feature_chart_artifacts(metrics: pd.DataFrame, *, chart_root: Path)
             y_column="correlation",
             ylabel="Correlation",
         )
+        save_multi_line_chart(
+            frame,
+            output_path=rmae_cvrmse_path,
+            title=f"{variable}: RMAE and CVRMSE by month",
+            y_columns=["rmae_pct", "cvrmse_pct"],
+            ylabel="Percent",
+        )
         save_yearly_summary_chart(
             frame,
             output_path=yearly_summary_path,
@@ -863,6 +1053,7 @@ def generate_feature_chart_artifacts(metrics: pd.DataFrame, *, chart_root: Path)
             "mae_rmse_by_month": str(mae_rmse_path),
             "wape_smape_by_month": str(wape_smape_path),
             "correlation_by_month": str(correlation_path),
+            "rmae_cvrmse_by_month": str(rmae_cvrmse_path),
             "yearly_summary": str(yearly_summary_path),
         }
     return outputs
@@ -930,6 +1121,7 @@ def update_biomap_final_workbook(
     runs_root = infer_runs_root(current_run_dir, workbook_path, runs_root)
     workbook_path = workbook_path or default_workbook_path(runs_root)
     chart_root = default_chart_root(runs_root)
+    area_analysis_scaffold = ensure_area_analysis_scaffold(runs_root)
     workbook_path.parent.mkdir(parents=True, exist_ok=True)
     chart_root.mkdir(parents=True, exist_ok=True)
 
@@ -966,6 +1158,7 @@ def update_biomap_final_workbook(
     indicator_map = build_indicator_map(dashboard)
     coverage = coverage_from_metrics(all_metrics)
     species_index = build_species_index(all_metrics)
+    native_output_index = build_native_output_index(run_dirs, runs_root)
 
     sheets: OrderedDict[str, pd.DataFrame] = OrderedDict()
     sheets["Dashboard_BIOMAP"] = dashboard
@@ -973,17 +1166,16 @@ def update_biomap_final_workbook(
     sheets["Metric_Guide"] = metric_guide()
     sheets["Technical_Notes"] = technical_notes(manifest)
     sheets["Coverage"] = coverage
-    sheets["Temperature_t2m"] = filter_metrics(all_metrics, lambda frame: (frame["group"] == "climate") & (frame["variable"] == "t2m"))
-    sheets["Precipitation_tp"] = filter_metrics(all_metrics, lambda frame: (frame["group"] == "climate") & (frame["variable"] == "tp"))
+    sheets["Native_Output_Index"] = native_output_index
+    for feature in CURATED_BIOMAP_FEATURES:
+        sheets[str(feature["sheet_name"])] = filter_curated_feature_metrics(all_metrics, feature)
     sheets["Species_Biodiversity"] = species_metrics
     sheets["Species_Index"] = species_index
-    sheets["Vegetation_NDVI"] = filter_metrics(all_metrics, lambda frame: (frame["group"] == "vegetation") & (frame["variable"] == "NDVI"))
-    sheets["Forest"] = filter_metrics(all_metrics, lambda frame: frame["group"] == "forest")
-    sheets["Agriculture_Cropland"] = filter_metrics(all_metrics, lambda frame: frame["group"] == "agriculture")
+    sheets["Agriculture_All"] = filter_metrics(all_metrics, lambda frame: frame["group"] == "agriculture")
     sheets["Climate_Other"] = filter_metrics(all_metrics, lambda frame: (frame["group"] == "climate") & (~frame["variable"].isin(["t2m", "tp"])))
     sheets["Edaphic_Land"] = filter_metrics(all_metrics, lambda frame: frame["group"].isin(["edaphic", "land"]))
     sheets["Surface"] = filter_metrics(all_metrics, lambda frame: frame["group"] == "surface")
-    sheets["Atmospheric"] = filter_metrics(all_metrics, lambda frame: frame["group"] == "atmospheric")
+    sheets["Atmospheric_All"] = filter_metrics(all_metrics, lambda frame: frame["group"] == "atmospheric")
     sheets["Misc_Redlist"] = filter_metrics(all_metrics, lambda frame: frame["group"].isin(["misc", "redlist"]))
     sheets["Species_Native_By_ID"] = filter_metrics(all_metrics, lambda frame: frame["group"] == "species")
     sheets["All_Variables"] = all_metrics
@@ -996,6 +1188,8 @@ def update_biomap_final_workbook(
     return {
         "workbook": str(written_workbook),
         "chart_root": str(chart_root),
+        "area_analysis_root": area_analysis_scaffold["root"],
+        "area_analysis_schema": area_analysis_scaffold["schema"],
         "charts": chart_outputs,
         "runs_used": len(run_dirs),
         "latest_run": str(current_run_dir),

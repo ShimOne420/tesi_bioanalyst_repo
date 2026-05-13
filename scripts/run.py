@@ -29,6 +29,7 @@ import torch
 import torch.nn.functional as F
 from omegaconf import OmegaConf
 
+from biomap_curated_features import CURATED_BIOMAP_FEATURES
 from bioanalyst_model_utils import audit_precipitation_source
 from bioanalyst_model_utils import build_selection_parser
 from bioanalyst_model_utils import resolve_city_bounds
@@ -59,50 +60,8 @@ from spatial_alignment import (
 )
 
 
-RELIABLE_PLOT_FEATURES = [
-    {
-        "folder": "temperature",
-        "file_prefix": "t2m",
-        "group": "climate",
-        "variable": "t2m",
-        "cmap": "coolwarm",
-    },
-    {
-        "folder": "ndvi",
-        "file_prefix": "ndvi",
-        "group": "vegetation",
-        "variable": "NDVI",
-        "cmap": "YlGn",
-    },
-    {
-        "folder": "swvl1",
-        "file_prefix": "swvl1",
-        "group": "edaphic",
-        "variable": "swvl1",
-        "cmap": "Blues",
-    },
-    {
-        "folder": "swvl2",
-        "file_prefix": "swvl2",
-        "group": "edaphic",
-        "variable": "swvl2",
-        "cmap": "Blues",
-    },
-    {
-        "folder": "cropland",
-        "file_prefix": "cropland",
-        "group": "agriculture",
-        "variable": "Cropland",
-        "cmap": "YlOrBr",
-    },
-    {
-        "folder": "precipitation",
-        "file_prefix": "tp",
-        "group": "climate",
-        "variable": "tp",
-        "cmap": "PuBu",
-    },
-]
+RELIABLE_PLOT_FEATURES = CURATED_BIOMAP_FEATURES
+AREA_ANALYSIS_DIRNAME = "area_analysis"
 
 
 def output_root_for_run(run_dir: Path) -> Path:
@@ -118,6 +77,10 @@ def previsioni_root_for_run(run_dir: Path) -> Path:
 
 def chart_root_for_run(run_dir: Path) -> Path:
     return output_root_for_run(run_dir) / "chart"
+
+
+def area_analysis_root_for_run(run_dir: Path) -> Path:
+    return output_root_for_run(run_dir) / AREA_ANALYSIS_DIRNAME
 
 
 def previsioni_month_dir(run_dir: Path, manifest: dict[str, Any]) -> Path:
@@ -139,6 +102,57 @@ def monthly_cell_matrix_dir(previsioni_run_dir: Path) -> Path:
 
 def monthly_species_dir(previsioni_run_dir: Path) -> Path:
     return previsioni_run_dir / "species"
+
+
+def ensure_area_analysis_scaffold(run_dir: Path) -> dict[str, str]:
+    area_root = area_analysis_root_for_run(run_dir)
+    area_root.mkdir(parents=True, exist_ok=True)
+    schema_path = area_root / "_schema.json"
+    schema_payload = {
+        "status": "reserved_for_future_frontend_and_analysis_pipeline",
+        "observed_monthly_wide_columns": [
+            "month",
+            "t2m_mean_area",
+            "tp_mean_area",
+            "NDVI_mean_area",
+            "swvl1_mean_area",
+            "swvl2_mean_area",
+            "q_mean_area",
+            "Forest_mean_area",
+            "Arable_mean_area",
+            "Cropland_mean_area",
+            "avg_snlwrf_mean_area",
+            "stl1_mean_area",
+            "stl2_mean_area",
+        ],
+        "forecast_monthly_metrics_long_columns": [
+            "month",
+            "feature_key",
+            "group",
+            "variable",
+            "level_index",
+            "unit",
+            "predicted_mean",
+            "observed_mean",
+            "mae",
+            "rmse",
+            "correlation",
+            "wape_pct",
+            "smape_pct",
+            "rmae_pct",
+            "cvrmse_pct",
+            "valid_cell_count",
+        ],
+        "notes": [
+            "Questa cartella e riservata al dataset cumulativo area-level futuro.",
+            "Il frontend non viene ancora collegato a questi artefatti in questa fase.",
+        ],
+    }
+    schema_path.write_text(json.dumps(schema_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {
+        "root": str(area_root),
+        "schema": str(schema_path),
+    }
 
 
 def copy_if_present(source: str | None, destination: Path) -> str | None:
@@ -475,9 +489,15 @@ def export_reliable_feature_plots(
         group = feature["group"]
         variable = feature["variable"]
         file_prefix = feature["file_prefix"]
+        level_index = int(feature.get("level_index", 0))
         feature_dir = plot_root / feature["folder"]
         try:
-            predicted_map_raw, unit = get_batch_variable_map(predicted_batch, group_name=group, variable_name=variable)
+            predicted_map_raw, unit = get_batch_variable_map(
+                predicted_batch,
+                group_name=group,
+                variable_name=variable,
+                level_index=level_index,
+            )
         except SystemExit as exc:
             outputs["missing_features"].append({"group": group, "variable": variable, "reason": str(exc)})
             continue
@@ -502,7 +522,12 @@ def export_reliable_feature_plots(
         feature_outputs = {"prediction_png": str(prediction_png)}
         if observed_batch is not None:
             try:
-                observed_map, _ = get_batch_variable_map(observed_batch, group_name=group, variable_name=variable)
+                observed_map, _ = get_batch_variable_map(
+                    observed_batch,
+                    group_name=group,
+                    variable_name=variable,
+                    level_index=level_index,
+                )
             except SystemExit as exc:
                 outputs["missing_features"].append({"group": group, "variable": variable, "reason": str(exc)})
             else:
@@ -703,8 +728,9 @@ def compute_summary(frame: pd.DataFrame, value_label: str, scope: str, *, group:
             variable=variable,
         )
         summary.update(metrics)
+        summary.pop("relative_mae_pct", None)
         summary["cell_count"] = int(len(frame))
-        summary["error_pct_on_abs_observed_mean"] = metrics["relative_mae_pct"]
+        summary["error_pct_on_abs_observed_mean"] = metrics["rmae_pct"]
     return summary
 
 
@@ -818,9 +844,15 @@ def export_reliable_feature_workbooks(
         group = feature["group"]
         variable = feature["variable"]
         file_prefix = feature["file_prefix"]
+        level_index = int(feature.get("level_index", 0))
         feature_dir = export_root if flat_output else export_root / feature["folder"]
         try:
-            predicted_map_raw, unit = get_batch_variable_map(predicted_batch, group_name=group, variable_name=variable)
+            predicted_map_raw, unit = get_batch_variable_map(
+                predicted_batch,
+                group_name=group,
+                variable_name=variable,
+                level_index=level_index,
+            )
         except SystemExit as exc:
             outputs["missing_features"].append({"group": group, "variable": variable, "reason": str(exc)})
             continue
@@ -832,14 +864,19 @@ def export_reliable_feature_workbooks(
         observed_map = None
         if observed_batch is not None:
             try:
-                observed_map, _ = get_batch_variable_map(observed_batch, group_name=group, variable_name=variable)
+                observed_map, _ = get_batch_variable_map(
+                    observed_batch,
+                    group_name=group,
+                    variable_name=variable,
+                    level_index=level_index,
+                )
             except SystemExit as exc:
                 outputs["missing_features"].append({"group": group, "variable": variable, "reason": str(exc)})
         feature_outputs, _ = export_feature_matrix_bundle(
             run_dir=run_dir,
             export_dir=feature_dir,
-            workbook_prefix=file_prefix,
-            area_summary_prefix=file_prefix,
+            workbook_prefix=str(variable),
+            area_summary_prefix=str(variable),
             manifest=manifest,
             latitudes=latitudes,
             longitudes=longitudes,
@@ -1356,6 +1393,7 @@ def main() -> None:
     previsioni_run_output_dir.mkdir(parents=True, exist_ok=True)
     previsioni_cell_matrix_dir = monthly_cell_matrix_dir(previsioni_run_output_dir)
     previsioni_species_dir = monthly_species_dir(previsioni_run_output_dir)
+    area_analysis_scaffold = ensure_area_analysis_scaffold(context.run_dir)
     export_paths, area_summary_frame = export_maps_and_matrix(
         context.run_dir,
         manifest,
@@ -1403,6 +1441,7 @@ def main() -> None:
         previsioni_run_dir=previsioni_run_output_dir,
         feature_outputs=export_paths["reliable_feature_plots"],
     )
+    export_paths["area_analysis"] = area_analysis_scaffold
     if not args.no_history:
         default_history_name = (
             "native_lab_monthly_results_large.xlsx"

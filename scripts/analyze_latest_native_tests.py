@@ -183,7 +183,7 @@ def compute_metrics(predicted: np.ndarray, observed: np.ndarray, *, group: str, 
 def reliability_label(group: str, variable: str, metrics: dict[str, Any]) -> str:
     mae = metrics.get("mae", math.nan)
     corr = metrics.get("correlation", math.nan)
-    rel = metrics.get("relative_mae_pct", math.nan)
+    rel = metrics.get("rmae_pct", metrics.get("relative_mae_pct", math.nan))
     if group == "climate" and variable == "t2m":
         if mae <= 2.0 and corr >= 0.9:
             return "alta"
@@ -565,7 +565,7 @@ def create_report(
                 "wape_pct",
                 "smape_pct",
                 "correlation",
-                "relative_mae_pct",
+                "rmae_pct",
                 "reliability",
             ],
         )
@@ -585,7 +585,7 @@ def create_report(
     lines.append("Interpretazione: `d2m` e' utile come controllo climatico aggiuntivo; `NDVI`, `Forest` e `Agriculture` sono per ora diagnostici/proxy, perche' dipendono dal mapping dei dataset statici o quasi-statici dentro i canali nativi.")
     lines.append("")
     lines.append("### Specie / biodiversity proxy")
-    lines.append(markdown_table(species, ["forecast_month", "variable", "predicted_mean", "observed_mean", "mae", "rmse", "correlation", "relative_mae_pct", "reliability"], max_rows=30))
+    lines.append(markdown_table(species, ["forecast_month", "variable", "predicted_mean", "observed_mean", "mae", "rmse", "correlation", "rmae_pct", "reliability"], max_rows=30))
     lines.append("")
     lines.append("Interpretazione: le specie sono state analizzate come proxy nativo aggregato, non come species richness finale BIOMAP. La metrica `species_sum_proxy` somma i 28 canali specie nativi; le soglie 0.1 e 0.5 sono diagnostiche.")
     lines.append("")
