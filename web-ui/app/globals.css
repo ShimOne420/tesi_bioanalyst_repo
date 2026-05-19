@@ -144,6 +144,12 @@ select {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.coordinate-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .action-row {
   display: flex;
   flex-wrap: wrap;
@@ -240,6 +246,108 @@ select {
   background: var(--surface-strong);
 }
 
+.toolbar-row {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  margin-bottom: 16px;
+}
+
+.thematic-map-shell {
+  display: grid;
+  gap: 12px;
+}
+
+.thematic-map {
+  height: 460px;
+  min-height: 460px;
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--surface-strong);
+}
+
+.map-legend {
+  display: grid;
+  grid-template-columns: auto minmax(160px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.legend-gradient {
+  height: 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(32, 49, 38, 0.12);
+}
+
+.chart-shell {
+  display: grid;
+  gap: 16px;
+}
+
+.chart-summary {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.chart-summary div {
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+}
+
+.chart-summary span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.chart-summary strong {
+  font-size: 1.2rem;
+}
+
+.trend-svg {
+  width: 100%;
+  min-height: 280px;
+  border-radius: 18px;
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+}
+
+.chart-axis {
+  stroke: rgba(32, 49, 38, 0.42);
+  stroke-width: 1.4;
+}
+
+.chart-grid {
+  stroke: rgba(32, 49, 38, 0.1);
+  stroke-width: 1;
+}
+
+.chart-label {
+  fill: var(--muted);
+  font-size: 12px;
+}
+
+.trend-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.trend-point {
+  fill: var(--surface-strong);
+  stroke: var(--accent-strong);
+  stroke-width: 2.5;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -298,6 +406,11 @@ th {
   }
 
   .field-row {
+    grid-template-columns: 1fr;
+  }
+
+  .coordinate-grid,
+  .toolbar-row {
     grid-template-columns: 1fr;
   }
 

@@ -31,6 +31,19 @@ export type IndicatorRow = {
   species_count_observed_area: number | null;
 };
 
+export type CellRow = {
+  month: string;
+  latitude: number | null;
+  longitude: number | null;
+  temperature_mean_c: number | null;
+  precipitation_mean_mm: number | null;
+  ndvi_mean: number | null;
+  swvl1_mean: number | null;
+  swvl2_mean: number | null;
+  cropland_mean: number | null;
+  species_count_observed_cell: number | null;
+};
+
 export type FeatureMetricRow = {
   month: string;
   feature_key: string;
@@ -62,10 +75,17 @@ export type IndicatorResponse = {
   start: string;
   end: string;
   monthly: IndicatorRow[];
+  cellsUrl?: string;
   // Reserved for a future forecast/backtest view; the main dashboard ignores it.
   features?: FeatureMetricRow[];
   notes: string[];
   downloads?: DownloadLinks;
+};
+
+export type CellsResponse = {
+  label: string;
+  month: string;
+  cells: CellRow[];
 };
 
 export type DatasetMetadata = {

@@ -4,8 +4,16 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
+import { TrendChart } from "./trend-chart";
 import { buildBoundsFromCity, CITY_OPTIONS } from "../lib/cities";
+import {
+  OBSERVED_VARIABLES,
+  getObservedVariable,
+  type ObservedVariableKey
+} from "../lib/observed-variables";
 import type {
+  CellRow,
+  CellsResponse,
   DatasetMetadata,
   IndicatorResponse,
   IndicatorRow,
@@ -19,6 +27,23 @@ const EuropeSelectionMap = dynamic(
     loading: () => <div className="panel map-panel panel-inner">Caricamento mappa...</div>
   }
 );
+
+const IndicatorMap = dynamic(
+  () => import("./indicator-map").then((mod) => mod.IndicatorMap),
+  {
+    ssr: false,
+    loading: () => <div className="status info">Caricamento mappa tematica...</div>
+  }
+);
+
+type AreaSource = "city" | "map" | "coordinates";
+
+type CoordinateForm = {
+  minLat: string;
+  maxLat: string;
+  minLon: string;
+  maxLon: string;
+};
 
 function toMonthStart(value: string) {
   return `${value}-01`;
@@ -68,6 +93,36 @@ async function readApiError(response: Response, fallback: string) {
   }
 
   return fallback;
+}
+
+function boundsToCoordinateForm(bounds: SelectionBounds): CoordinateForm {
+  return {
+    minLat: bounds.minLat.toFixed(4),
+    maxLat: bounds.maxLat.toFixed(4),
+    minLon: bounds.minLon.toFixed(4),
+    maxLon: bounds.maxLon.toFixed(4)
+  };
+}
+
+function parseCoordinateBounds(form: CoordinateForm): { bounds?: SelectionBounds; error?: string } {
+  const minLat = Number(form.minLat);
+  const maxLat = Number(form.maxLat);
+  const minLon = Number(form.minLon);
+  const maxLon = Number(form.maxLon);
+
+  if ([minLat, maxLat, minLon, maxLon].some((value) => Number.isNaN(value))) {
+    return { error: "Inserisci coordinate numeriche valide." };
+  }
+
+  if (minLat < -90 || maxLat > 90 || minLon < -180 || maxLon > 180) {
+    return { error: "Le coordinate devono rispettare latitudine [-90, 90] e longitudine [-180, 180]." };
+  }
+
+  if (minLat >= maxLat || minLon >= maxLon) {
+    return { error: "Il bounding box richiede minLat < maxLat e minLon < maxLon." };
+  }
+
+  return { bounds: { minLat, maxLat, minLon, maxLon } };
 }
 
 const TABLE_COLUMNS: Array<{
@@ -201,7 +256,19 @@ export function BiomapDashboard() {
   const [startMonth, setStartMonth] = useState<string>("");
   const [endMonth, setEndMonth] = useState<string>("");
   const [manualBounds, setManualBounds] = useState<SelectionBounds | null>(null);
+  const [areaSource, setAreaSource] = useState<AreaSource>("city");
+  const [coordinateForm, setCoordinateForm] = useState<CoordinateForm>({
+    minLat: "",
+    maxLat: "",
+    minLon: "",
+    maxLon: ""
+  });
   const [result, setResult] = useState<IndicatorResponse | null>(null);
+  const [selectedVariableKey, setSelectedVariableKey] = useState<ObservedVariableKey>("temperature");
+  const [selectedOutputMonth, setSelectedOutputMonth] = useState<string>("");
+  const [cellRows, setCellRows] = useState<CellRow[]>([]);
+  const [cellsLoading, setCellsLoading] = useState<boolean>(false);
+  const [cellsError, setCellsError] = useState<string>("");
   const [metadata, setMetadata] = useState<DatasetMetadata | null>(null);
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
@@ -306,6 +373,85 @@ export function BiomapDashboard() {
   }, [metadata]);
 
   const activeBounds = manualBounds ?? cityPreviewBounds;
+  const activeAreaLabel = manualBounds
+    ? areaSource === "coordinates"
+      ? "Coordinate manuali"
+      : "Rettangolo disegnato"
+    : "Citta";
+  const selectedVariable = getObservedVariable(selectedVariableKey);
+  const outputMonths = result?.monthly.map((row) => row.month) ?? [];
+
+  useEffect(() => {
+    if (!result?.monthly.length) {
+      setSelectedOutputMonth("");
+      setCellRows([]);
+      return;
+    }
+
+    const latestMonth = result.monthly.at(-1)?.month ?? result.monthly[0].month;
+    setSelectedOutputMonth(latestMonth);
+    setCellRows([]);
+    setCellsError("");
+  }, [result]);
+
+  useEffect(() => {
+    if (!result?.cellsUrl || !selectedOutputMonth) {
+      setCellRows([]);
+      return;
+    }
+
+    const controller = new AbortController();
+    const cellsUrl = result.cellsUrl;
+
+    async function loadCells() {
+      setCellsLoading(true);
+      setCellsError("");
+
+      try {
+        const response = await fetch(`${cellsUrl}?month=${encodeURIComponent(selectedOutputMonth.slice(0, 7))}`, {
+          cache: "no-store",
+          signal: controller.signal
+        });
+
+        if (!response.ok) {
+          throw new Error(await readApiError(response, "Non sono riuscito a leggere le celle per la mappa."));
+        }
+
+        const payload = (await response.json()) as CellsResponse;
+        setCellRows(payload.cells);
+      } catch (cellsRequestError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setCellRows([]);
+        setCellsError(
+          cellsRequestError instanceof Error
+            ? cellsRequestError.message
+            : "Errore imprevisto nel caricamento celle."
+        );
+      } finally {
+        if (!controller.signal.aborted) {
+          setCellsLoading(false);
+        }
+      }
+    }
+
+    void loadCells();
+
+    return () => controller.abort();
+  }, [result, selectedOutputMonth]);
+
+  function activateCoordinateBounds() {
+    const parsed = parseCoordinateBounds(coordinateForm);
+    if (parsed.error || !parsed.bounds) {
+      setError(parsed.error ?? "Coordinate non valide.");
+      return;
+    }
+
+    setManualBounds(parsed.bounds);
+    setAreaSource("coordinates");
+    setError("");
+  }
 
   async function handleSubmit() {
     if (!manualBounds && !selectedCityConfig) {
@@ -329,7 +475,7 @@ export function BiomapDashboard() {
     const body = manualBounds
       ? {
           selectionMode: "bbox" as const,
-          label: "manual_area",
+          label: areaSource === "coordinates" ? "coordinate_area" : "manual_area",
           bounds: manualBounds,
           start: toMonthStart(startMonth),
           end: toMonthStart(endMonth)
@@ -378,7 +524,7 @@ export function BiomapDashboard() {
         <h1>Seleziona un&apos;area europea e calcola gli indicatori.</h1>
         <p>
           Questa interfaccia e pensata per il progetto BioMap: puoi scegliere una citta
-          europea oppure disegnare manualmente un rettangolo sulla mappa, definire il
+          europea, inserire coordinate o disegnare manualmente un rettangolo sulla mappa, definire il
           periodo e ottenere in output gli indicatori osservativi reali dell&apos;area.
         </p>
       </section>
@@ -388,8 +534,8 @@ export function BiomapDashboard() {
           <div className="panel-inner">
             <h2 className="section-title">Controlli</h2>
             <p className="section-copy">
-              La citta e il rettangolo sulla mappa sono alternativi. Se disegni una nuova
-              area, la selezione manuale ha la priorita.
+              Citta, coordinate e rettangolo sulla mappa sono alternative. L&apos;ultima
+              selezione manuale impostata diventa l&apos;area attiva.
             </p>
 
             <div className="controls-grid">
@@ -408,6 +554,7 @@ export function BiomapDashboard() {
                   onChange={(event) => {
                     setSelectedCity(event.target.value);
                     setManualBounds(null);
+                    setAreaSource("city");
                   }}
                   disabled={!cityOptions.length}
                 >
@@ -483,10 +630,55 @@ export function BiomapDashboard() {
                 </p>
               ) : null}
 
+              <div className="field-group">
+                <label>Coordinate bounding box</label>
+                <div className="coordinate-grid">
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="minLat"
+                    value={coordinateForm.minLat}
+                    onChange={(event) =>
+                      setCoordinateForm((current) => ({ ...current, minLat: event.target.value }))
+                    }
+                  />
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="maxLat"
+                    value={coordinateForm.maxLat}
+                    onChange={(event) =>
+                      setCoordinateForm((current) => ({ ...current, maxLat: event.target.value }))
+                    }
+                  />
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="minLon"
+                    value={coordinateForm.minLon}
+                    onChange={(event) =>
+                      setCoordinateForm((current) => ({ ...current, minLon: event.target.value }))
+                    }
+                  />
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="maxLon"
+                    value={coordinateForm.maxLon}
+                    onChange={(event) =>
+                      setCoordinateForm((current) => ({ ...current, maxLon: event.target.value }))
+                    }
+                  />
+                </div>
+                <button className="secondary-button" type="button" onClick={activateCoordinateBounds}>
+                  Usa coordinate
+                </button>
+              </div>
+
               <div className="selection-card">
                 {manualBounds ? (
                   <>
-                    <strong>Area manuale attiva.</strong>
+                    <strong>{activeAreaLabel} attivo.</strong>
                     <br />
                     lat {manualBounds.minLat.toFixed(2)} .. {manualBounds.maxLat.toFixed(2)}
                     <br />
@@ -517,7 +709,10 @@ export function BiomapDashboard() {
                 <button
                   className="secondary-button"
                   type="button"
-                  onClick={() => setManualBounds(null)}
+                  onClick={() => {
+                    setManualBounds(null);
+                    setAreaSource("city");
+                  }}
                 >
                   Azzera selezione manuale
                 </button>
@@ -539,6 +734,12 @@ export function BiomapDashboard() {
             previewBounds={manualBounds ? null : cityPreviewBounds}
             onBoundsChange={(bounds) => {
               setManualBounds(bounds);
+              if (bounds) {
+                setAreaSource("map");
+                setCoordinateForm(boundsToCoordinateForm(bounds));
+              } else {
+                setAreaSource("city");
+              }
             }}
           />
         </div>
@@ -587,6 +788,69 @@ export function BiomapDashboard() {
                     ? "n.d."
                     : latestRow.species_count_observed_area}
                 </strong>
+              </div>
+            </div>
+
+            <div className="panel">
+              <div className="panel-inner">
+                <h2 className="section-title">Mappa tematica osservativa</h2>
+                <p className="section-copy">
+                  Visualizza la variabile selezionata sulle celle dell&apos;area calcolata.
+                </p>
+
+                <div className="toolbar-row">
+                  <div className="field-group">
+                    <label htmlFor="observed-variable">Variabile</label>
+                    <select
+                      id="observed-variable"
+                      value={selectedVariableKey}
+                      onChange={(event) => setSelectedVariableKey(event.target.value as ObservedVariableKey)}
+                    >
+                      {OBSERVED_VARIABLES.map((variable) => (
+                        <option key={variable.key} value={variable.key}>
+                          {variable.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="field-group">
+                    <label htmlFor="output-month">Mese mappa</label>
+                    <select
+                      id="output-month"
+                      value={selectedOutputMonth}
+                      onChange={(event) => setSelectedOutputMonth(event.target.value)}
+                    >
+                      {outputMonths.map((month) => (
+                        <option key={month} value={month}>
+                          {month.slice(0, 7)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {cellsError ? <div className="status error">{cellsError}</div> : null}
+                {cellsLoading ? <div className="status info">Caricamento celle della mappa...</div> : null}
+
+                {activeBounds && selectedOutputMonth && !cellsLoading && !cellsError ? (
+                  <IndicatorMap
+                    bounds={activeBounds}
+                    cells={cellRows}
+                    variable={selectedVariable}
+                    month={selectedOutputMonth}
+                  />
+                ) : null}
+              </div>
+            </div>
+
+            <div className="panel">
+              <div className="panel-inner">
+                <h2 className="section-title">Trend osservativo</h2>
+                <p className="section-copy">
+                  Andamento di {selectedVariable.label.toLowerCase()} nel periodo calcolato.
+                </p>
+                <TrendChart rows={result.monthly} variable={selectedVariable} />
               </div>
             </div>
 
@@ -653,13 +917,13 @@ export function BiomapDashboard() {
             <div className="panel-inner">
               <h2 className="section-title">Output</h2>
               <p className="section-copy">
-                Seleziona una citta oppure disegna un rettangolo sulla mappa, scegli il
+                Seleziona una citta, inserisci coordinate oppure disegna un rettangolo sulla mappa, scegli il
                 periodo e premi il pulsante di conferma per vedere gli indicatori.
               </p>
 
               {activeBounds ? (
                 <div className="selection-card">
-                  Area pronta per il calcolo:
+                  Area pronta per il calcolo ({activeAreaLabel.toLowerCase()}):
                   <br />
                   lat {activeBounds.minLat.toFixed(2)} .. {activeBounds.maxLat.toFixed(2)}
                   <br />

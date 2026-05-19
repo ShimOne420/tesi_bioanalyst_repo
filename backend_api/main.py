@@ -68,6 +68,18 @@ def parse_int(value: str | None) -> int | None:
     return int(float(value))
 
 
+def nullable_float(value: Any) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+    return float(value)
+
+
+def nullable_int(value: Any) -> int | None:
+    if value is None or pd.isna(value):
+        return None
+    return int(float(value))
+
+
 # Carichiamo una sola volta il catalogo locale completo delle citta europee usato da backend e UI.
 @lru_cache(maxsize=1)
 def load_city_catalog() -> list[dict[str, Any]]:
@@ -244,6 +256,39 @@ def read_monthly_csv(path: Path) -> list[dict[str, Any]]:
         return rows
 
 
+def read_cells_parquet(path: Path, month: str) -> list[dict[str, Any]]:
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Parquet celle non trovato per questo calcolo.")
+
+    target_month = pd.Timestamp(month).to_period("M").to_timestamp()
+    df = pd.read_parquet(path)
+    df["month"] = pd.to_datetime(df["month"]).dt.to_period("M").dt.to_timestamp()
+    df = df[df["month"] == target_month].copy()
+
+    if df.empty:
+        raise HTTPException(status_code=404, detail=f"Nessuna cella trovata per il mese {target_month:%Y-%m}.")
+
+    records = []
+    for row in df.itertuples(index=False):
+        record = row._asdict()
+        records.append(
+            {
+                "month": pd.Timestamp(record["month"]).strftime("%Y-%m-%d"),
+                "latitude": nullable_float(record.get("latitude")),
+                "longitude": nullable_float(record.get("longitude")),
+                "temperature_mean_c": nullable_float(record.get("temperature_mean_c")),
+                "precipitation_mean_mm": nullable_float(record.get("precipitation_mean_mm")),
+                "ndvi_mean": nullable_float(record.get("ndvi_mean")),
+                "swvl1_mean": nullable_float(record.get("swvl1_mean")),
+                "swvl2_mean": nullable_float(record.get("swvl2_mean")),
+                "cropland_mean": nullable_float(record.get("cropland_mean")),
+                "species_count_observed_cell": nullable_int(record.get("species_count_observed_cell")),
+            }
+        )
+
+    return records
+
+
 def resolve_python_executable() -> str:
     candidates = [
         PROJECT_ROOT / ".venv" / "Scripts" / "python.exe",
@@ -384,6 +429,7 @@ def run_indicator_job(body: dict[str, Any]) -> dict[str, Any]:
         "start": summary["start"],
         "end": summary["end"],
         "monthly": monthly,
+        "cellsUrl": f"/api/cells/{label_slug}",
         "notes": notes,
         "downloads": {
             "csvUrl": f"/api/download/{label_slug}/csv",
@@ -418,6 +464,17 @@ def indicators(body: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="I campi `start` e `end` sono obbligatori.")
 
     return run_indicator_job(body)
+
+
+@app.get("/api/cells/{label}")
+def cells(label: str, month: str) -> dict[str, Any]:
+    label_slug = slugify(label)
+    output_paths = get_output_paths(label_slug)
+    return {
+        "label": label_slug,
+        "month": pd.Timestamp(month).to_period("M").to_timestamp().strftime("%Y-%m-%d"),
+        "cells": read_cells_parquet(output_paths["cells_parquet"], month),
+    }
 
 
 # Permettiamo alla UI di scaricare i file prodotti dall'ultimo calcolo per una label specifica.

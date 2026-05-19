@@ -18,6 +18,7 @@ Il backend:
 - `GET /api/cities`
 - `GET /api/metadata`
 - `POST /api/indicators`
+- `GET /api/cells/{label}?month=YYYY-MM`
 - `GET /api/download/{label}/{file_format}`
 
 `/api/metadata` restituisce il periodo realmente disponibile dei tre layer minimi usati dalla UI.
@@ -27,6 +28,8 @@ Il backend:
 - `csv`
 - `excel_csv`
 - `xlsx`
+
+`/api/cells/{label}` legge il parquet cella-per-mese dell'ultimo calcolo con quella label e restituisce le celle usate dalla mappa tematica osservativa.
 
 ## Avvio locale
 

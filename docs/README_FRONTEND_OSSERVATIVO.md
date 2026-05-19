@@ -17,6 +17,14 @@ La tabella ha una riga per mese e queste colonne:
 
 I pulsanti `Esporta CSV` e `Esporta Excel` scaricano esattamente la tabella visibile. Quando il backend locale e attivo restano disponibili anche i download prodotti dalla pipeline Python: `Scarica CSV`, `Scarica CSV per Excel`, `Scarica XLSX`.
 
+La selezione area puo arrivare da tre ingressi alternativi:
+
+- citta europea;
+- rettangolo disegnato sulla mappa;
+- coordinate manuali `minLat`, `maxLat`, `minLon`, `maxLon`.
+
+La schermata mostra anche una mappa tematica osservativa sopra la tabella e un grafico trend della variabile selezionata.
+
 ## Perche non ci sono predicted e metriche forecast
 
 La tabella con `Predicted Mean`, `Observed Mean`, `MAE`, `RMSE`, `Bias`, `WAPE`, `SMAPE` e `SMAAPE` appartiene alla logica forecast/backtest, non alla pipeline osservativa.
@@ -73,6 +81,12 @@ python -m py_compile scripts/selected_area_indicators.py backend_api/main.py
 cd web-ui
 npx tsc --noEmit
 npm run build
+```
+
+Per verificare le celle della mappa dopo un calcolo:
+
+```bash
+curl "http://127.0.0.1:8000/api/cells/<label>?month=2001-01"
 ```
 
 ## Test manuale atteso

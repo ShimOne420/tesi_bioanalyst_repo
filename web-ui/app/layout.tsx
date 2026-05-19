@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
 
 export const metadata: Metadata = {
   title: "BioMap Explorer",
-  description: "Interfaccia per selezionare aree europee e calcolare indicatori minimi da BioCube."
+  description: "Interfaccia per selezionare aree europee e calcolare indicatori osservativi da BioCube."
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

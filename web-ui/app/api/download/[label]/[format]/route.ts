@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+const DEFAULT_LOCAL_BACKEND_URL = "http://127.0.0.1:8000";
+
+function getBackendBaseUrl() {
+  return process.env.PYTHON_API_BASE_URL?.trim() || DEFAULT_LOCAL_BACKEND_URL;
+}
+
 type RouteContext = {
   params: {
     label: string;
@@ -11,15 +17,8 @@ type RouteContext = {
 
 export async function GET(_request: Request, context: RouteContext) {
   try {
-    if (!process.env.PYTHON_API_BASE_URL) {
-      return NextResponse.json(
-        { error: "Download non disponibile senza backend Python configurato." },
-        { status: 503 }
-      );
-    }
-
     const { label, format } = context.params;
-    const target = `${process.env.PYTHON_API_BASE_URL}/api/download/${label}/${format}`;
+    const target = `${getBackendBaseUrl()}/api/download/${label}/${format}`;
     const forwarded = await fetch(target, { method: "GET", cache: "no-store" });
 
     if (!forwarded.ok) {

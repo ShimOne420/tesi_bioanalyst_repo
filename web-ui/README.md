@@ -10,7 +10,10 @@ L'app permette di:
 - filtrare rapidamente migliaia di citta europee per nome o paese
 - definire un periodo mensile
 - disegnare manualmente un rettangolo sulla mappa d'Europa
+- inserire manualmente coordinate `minLat`, `maxLat`, `minLon`, `maxLon`
 - inviare la selezione a un backend
+- visualizzare una mappa tematica osservativa per mese e variabile
+- visualizzare un grafico trend della variabile selezionata
 - visualizzare in output gli indicatori osservativi BIOMAP per mese
 - esportare la tabella visualizzata in `CSV` o `Excel`
 - scaricare l'output mensile in `CSV`, `CSV per Excel` o `XLSX`
@@ -29,6 +32,7 @@ Le route principali usate dalla UI sono:
 
 - `GET /api/metadata` per leggere l'intervallo reale disponibile del dataset
 - `POST /api/indicators` per calcolare gli indicatori sull'area selezionata
+- `GET /api/cells/:label?month=YYYY-MM` per leggere le celle della mappa tematica
 - `GET /api/download/:label/:format` per scaricare i file generati
 
 ## Sviluppo locale
@@ -86,6 +90,9 @@ Quando backend e frontend sono entrambi aggiornati:
 
 - il selettore periodo usa automaticamente il range reale del dataset: `2000-01 -> 2020-12`
 - puoi scegliere qualunque intervallo mensile dentro quel range
+- puoi selezionare l'area con citta, rettangolo disegnato o coordinate manuali
+- sopra la tabella compare una mappa tematica filtrabile per mese e variabile
+- sotto la mappa compare un grafico trend della variabile selezionata
 - la tabella mostra una riga per mese con temperatura, precipitazione, NDVI, SWVL1, SWVL2, Cropland e celle valide
 - dopo il calcolo compaiono i pulsanti di esportazione della tabella e, se il backend locale e attivo, tre pulsanti download:
   - `Esporta CSV`
