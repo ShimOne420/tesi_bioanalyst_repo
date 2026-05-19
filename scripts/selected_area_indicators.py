@@ -111,7 +111,7 @@ def optional_path(path: Path) -> Path | None:
 def read_spatial_table(path: Path) -> pd.DataFrame:
     suffix = path.suffix.casefold()
     if suffix == ".csv":
-        return pd.read_csv(path)
+        return pd.read_csv(path, low_memory=False)
     if suffix in {".xlsx", ".xls"}:
         workbook = pd.ExcelFile(path)
         for sheet_name in workbook.sheet_names:
@@ -260,7 +260,10 @@ def build_monthly_table_layer(
         local = local[local["_month_start"] == month.to_period("M").to_timestamp()]
         selected_value_column = value_column(local, variable_name)
     else:
-        selected_value_column = find_monthly_column([str(column) for column in frame.columns], variable_name, month)
+        try:
+            selected_value_column = find_monthly_column([str(column) for column in frame.columns], variable_name, month)
+        except KeyError:
+            return pd.DataFrame(columns=["latitude", "longitude", output_column])
         local = frame
 
     if local.empty:
