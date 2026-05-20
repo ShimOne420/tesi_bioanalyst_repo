@@ -328,18 +328,47 @@ def merge_layer(frame: pd.DataFrame, layer: pd.DataFrame, value_column_name: str
     return frame.merge(layer, on=["latitude", "longitude"], how="left")
 
 
+def empty_land_layer(land_mask: xr.DataArray) -> xr.DataArray:
+    return xr.full_like(land_mask, np.nan, dtype=float)
+
+
+def select_month_dataarray(
+    ds: xr.Dataset,
+    variable_name: str,
+    month_ts: pd.Timestamp,
+    land_mask: xr.DataArray,
+) -> xr.DataArray:
+    if variable_name not in ds.data_vars:
+        return empty_land_layer(land_mask)
+
+    data = ds[variable_name]
+    if "valid_time" not in data.dims:
+        return data.where(land_mask)
+
+    months = pd.to_datetime(ds["valid_time"].values).to_period("M").to_timestamp()
+    target_month = month_ts.to_period("M").to_timestamp()
+    matching_indexes = np.where(months == target_month)[0]
+    if len(matching_indexes) == 0:
+        return empty_land_layer(land_mask)
+
+    return data.isel(valid_time=int(matching_indexes[0])).where(land_mask)
+
+
 def precipitation_layers(
     ds_prec: xr.Dataset,
     land_mask: xr.DataArray,
-    time_index: int,
     month_ts: pd.Timestamp,
 ) -> tuple[xr.DataArray, xr.DataArray, str]:
     month_days = days_in_month(month_ts)
     if "avg_tprate" in ds_prec.data_vars:
-        daily_mm = ds_prec["avg_tprate"].isel(valid_time=time_index).where(land_mask) * 86400.0
+        daily_mm = select_month_dataarray(ds_prec, "avg_tprate", month_ts, land_mask) * 86400.0
         return daily_mm, daily_mm * month_days, "avg_tprate kg m^-2 s^-1 -> mm/mese"
 
-    monthly_mm = ds_prec["tp"].isel(valid_time=time_index).where(land_mask) * 1000.0
+    if "tp" not in ds_prec.data_vars:
+        empty = empty_land_layer(land_mask)
+        return empty, empty, "precipitazione non disponibile"
+
+    monthly_mm = select_month_dataarray(ds_prec, "tp", month_ts, land_mask) * 1000.0
     return monthly_mm / month_days, monthly_mm, "tp raw_m * 1000 -> mm/mese"
 
 
@@ -569,7 +598,6 @@ def build_selected_cell_month_frame(
     precipitation_daily_mm, precipitation_monthly_mm, _ = precipitation_layers(
         ds_prec=ds_prec,
         land_mask=land_mask,
-        time_index=time_index,
         month_ts=month_ts,
     )
 
@@ -578,8 +606,8 @@ def build_selected_cell_month_frame(
             "temperature_mean_c": ds_temp["t2m"].isel(valid_time=time_index).where(land_mask) - 273.15,
             "precipitation_mean_daily_mm": precipitation_daily_mm,
             "precipitation_mean_mm": precipitation_monthly_mm,
-            "swvl1_mean": ds_edaphic["swvl1"].isel(valid_time=time_index).where(land_mask),
-            "swvl2_mean": ds_edaphic["swvl2"].isel(valid_time=time_index).where(land_mask),
+            "swvl1_mean": select_month_dataarray(ds_edaphic, "swvl1", month_ts, land_mask),
+            "swvl2_mean": select_month_dataarray(ds_edaphic, "swvl2", month_ts, land_mask),
         }
     )
     frame = month_ds.to_dataframe().reset_index()
