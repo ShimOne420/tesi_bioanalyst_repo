@@ -184,7 +184,21 @@ def month_number_from_value(value: object) -> int | None:
 
 def value_column(df: pd.DataFrame, variable_name: str) -> str:
     lower_to_column = {str(column).strip().casefold(): str(column) for column in df.columns}
-    for candidate in (variable_name, variable_name.lower(), "value", "Value"):
+    for candidate in (
+        variable_name,
+        variable_name.lower(),
+        variable_name.upper(),
+        "value",
+        "Value",
+        "mean",
+        "Mean",
+        "mean_value",
+        "Mean_Value",
+        f"{variable_name}_value",
+        f"{variable_name}_mean",
+        f"{variable_name.lower()}_value",
+        f"{variable_name.lower()}_mean",
+    ):
         if candidate.casefold() in lower_to_column:
             return lower_to_column[candidate.casefold()]
     for column in df.columns:
@@ -213,22 +227,300 @@ def parse_month_from_column_name(column: str, variable_name: str) -> pd.Timestam
 
 def find_monthly_column(columns: list[str], variable_name: str, month: pd.Timestamp) -> str:
     month = month.to_period("M").to_timestamp()
+    month_number = int(month.month)
+    year_text = str(month.year)
+    month_tokens = {
+        f"{month_number}",
+        f"{month_number:02d}",
+        month.strftime("%b").lower(),
+        month.strftime("%B").lower(),
+    }
     direct_candidates = [
         f"{variable_name}_{month:%m/%Y}",
         f"{variable_name}_{month.month}/{month.year}",
         f"{variable_name}_{month:%Y_%m}",
         f"{variable_name}_{month:%Y-%m}",
         f"{variable_name}_{month:%Y%m}",
+        f"{variable_name}_{month:%Y-%m-%d}",
+        f"{variable_name}_{month.year}_{month_number:02d}",
+        f"{variable_name}_{month.year}-{month_number}",
+        f"{month:%Y_%m}_{variable_name}",
+        f"{month:%Y-%m}_{variable_name}",
+        f"{month:%Y_%m}",
+        f"{month:%Y-%m}",
+        f"{month:%Y%m}",
+        f"{month:%Y-%m-%d}",
+        f"{month.year}_{month_number}",
+        f"{month.year}-{month_number}",
     ]
-    columns_by_name = {str(column): str(column) for column in columns}
+    columns_by_name = {str(column).casefold(): str(column) for column in columns}
     for candidate in direct_candidates:
-        if candidate in columns_by_name:
-            return columns_by_name[candidate]
+        match = columns_by_name.get(candidate.casefold())
+        if match is not None:
+            return match
+
+    variable_compact = re.sub(r"[^a-zA-Z0-9]+", "", str(variable_name)).casefold()
+    compact_candidates = {
+        f"{variable_compact}{month_number:02d}{year_text}",
+        f"{variable_compact}{month_number}{year_text}",
+        f"{variable_compact}{year_text}{month_number:02d}",
+        f"{variable_compact}{year_text}{month_number}",
+        f"{month_number:02d}{year_text}{variable_compact}",
+        f"{month_number}{year_text}{variable_compact}",
+        f"{year_text}{month_number:02d}{variable_compact}",
+        f"{year_text}{month_number}{variable_compact}",
+    }
+    for column in columns:
+        column_text = str(column)
+        compact = re.sub(r"[^a-zA-Z0-9]+", "", column_text).casefold()
+        if compact in compact_candidates:
+            return column_text
+
+    regex_patterns = [
+        re.compile(rf"{re.escape(variable_name)}\D*0?{month_number}\D*{year_text}", re.IGNORECASE),
+        re.compile(rf"{re.escape(variable_name)}\D*{year_text}\D*0?{month_number}", re.IGNORECASE),
+        re.compile(rf"0?{month_number}\D*{year_text}\D*{re.escape(variable_name)}", re.IGNORECASE),
+        re.compile(rf"{year_text}\D*0?{month_number}\D*{re.escape(variable_name)}", re.IGNORECASE),
+    ]
+    for column in columns:
+        column_text = str(column)
+        if any(pattern.search(column_text) for pattern in regex_patterns):
+            return column_text
+
+    ignored = {"country", "latitude", "longitude", "lat", "lon", "year", "month", "date", "timestamp", "variable"}
+    regex_matches = []
+    for column in columns:
+        column_text = str(column)
+        normalized = re.sub(r"[^a-zA-Z0-9]+", " ", column_text).casefold()
+        tokens = set(normalized.split())
+        if column_text.casefold() in ignored:
+            continue
+        if str(month.year) not in tokens:
+            continue
+        if not tokens.intersection(month_tokens):
+            continue
+        regex_matches.append(column_text)
+
+    if regex_matches:
+        with_variable_name = [name for name in regex_matches if variable_name.casefold() in name.casefold()]
+        return with_variable_name[0] if with_variable_name else regex_matches[0]
+
+    raise KeyError(
+        f"Colonna mensile {variable_name} non trovata per {month:%Y-%m}. "
+        f"Esempi attesi: {direct_candidates[:6]}. "
+        f"Prime colonne disponibili: {columns[:20]}"
+    )
+
+
+def collect_search_roots(*env_names: str) -> list[Path]:
+    roots: list[Path] = []
+    for env_name in env_names:
+        env_value = os.getenv(env_name)
+        if not env_value:
+            continue
+        for raw_item in env_value.split(os.pathsep):
+            item = raw_item.strip()
+            if item:
+                roots.append(Path(item).expanduser())
+    return roots
+
+
+def read_table_columns(path: Path) -> list[str]:
+    suffix = path.suffix.casefold()
+    if suffix == ".csv":
+        return [str(column).strip() for column in pd.read_csv(path, nrows=0).columns]
+    if suffix in {".xlsx", ".xls"}:
+        workbook = pd.ExcelFile(path)
+        for sheet_name in workbook.sheet_names:
+            preview = pd.read_excel(workbook, sheet_name=sheet_name, nrows=0)
+            columns = [str(column).strip() for column in preview.columns]
+            normalized = {column.casefold() for column in columns}
+            has_coordinates = (
+                ("latitude" in normalized or "lat" in normalized)
+                and ("longitude" in normalized or "lon" in normalized)
+            )
+            has_monthly_signal = any(re.search(r"\d{4}", column) for column in columns)
+            if has_coordinates and has_monthly_signal:
+                return columns
+        return []
+    return []
+
+
+def latest_monthly_column(columns: list[str], variable_name: str) -> pd.Timestamp | None:
+    months = []
     for column in columns:
         parsed = parse_month_from_column_name(str(column), variable_name)
-        if parsed is not None and parsed == month:
-            return str(column)
-    raise KeyError(f"Colonna mensile {variable_name} non trovata per {month:%Y-%m}.")
+        if parsed is not None:
+            months.append(parsed)
+            continue
+        parsed_without_name = parse_month_from_column_name(f"{variable_name}_{column}", variable_name)
+        if parsed_without_name is not None:
+            months.append(parsed_without_name)
+    return max(months) if months else None
+
+
+def infer_spatial_table_month_range(path: Path, variable_name: str) -> tuple[pd.Timestamp, pd.Timestamp] | None:
+    frame = read_spatial_table(path)
+    year_column = next((name for name in ("Year", "year", "YEAR", "Anno", "anno") if name in frame.columns), None)
+    month_column = next((name for name in ("Month", "month", "MONTH", "Mese", "mese") if name in frame.columns), None)
+    date_column = next(
+        (name for name in ("Timestamp", "timestamp", "Date", "date", "valid_time") if name in frame.columns),
+        None,
+    )
+
+    if year_column and month_column:
+        years = pd.to_numeric(frame[year_column], errors="coerce")
+        months = frame[month_column].map(month_number_from_value)
+        dates = [
+            pd.Timestamp(year=int(year), month=int(month), day=1)
+            for year, month in zip(years, months)
+            if pd.notna(year) and month is not None
+        ]
+    elif date_column:
+        dates = pd.to_datetime(frame[date_column], errors="coerce").dt.to_period("M").dt.to_timestamp().dropna().tolist()
+    elif month_column:
+        dates = pd.to_datetime(frame[month_column], errors="coerce").dt.to_period("M").dt.to_timestamp().dropna().tolist()
+    else:
+        dates = []
+        for column in frame.columns:
+            parsed = parse_month_from_column_name(str(column), variable_name)
+            if parsed is not None:
+                dates.append(parsed)
+                continue
+            parsed_without_name = parse_month_from_column_name(f"{variable_name}_{column}", variable_name)
+            if parsed_without_name is not None:
+                dates.append(parsed_without_name)
+
+    if not dates:
+        return None
+    return min(dates), max(dates)
+
+
+def ndvi_source_score(path: Path) -> tuple[pd.Timestamp, int] | None:
+    try:
+        table_range = infer_spatial_table_month_range(path, "NDVI")
+    except (OSError, ValueError, pd.errors.EmptyDataError, pd.errors.ParserError):
+        return None
+    if table_range is None:
+        return None
+    _, latest = table_range
+    return latest, int(path.stat().st_size)
+
+
+def resolve_ndvi_source_path(biocube_dir: Path, default_path: Path) -> Path | None:
+    candidates: list[Path] = []
+    for env_name in ("BIOCUBE_NDVI_PATH", "LAND_NDVI_PATH", "NDVI_CSV_PATH"):
+        env_value = os.getenv(env_name)
+        if env_value:
+            candidates.append(Path(env_value).expanduser())
+
+    land_dir = biocube_dir / "Land"
+    candidates.extend(
+        [
+            default_path,
+            default_path.with_suffix(".xlsx"),
+            default_path.with_suffix(".xls"),
+            land_dir / "Europe_ndvi_monthly_un_025.csv",
+            land_dir / "Europe_ndvi_monthly_un_025.xlsx",
+            land_dir / "Europe_ndvi_monthly_un_025.xls",
+        ]
+    )
+    if land_dir.exists():
+        for pattern in ("Europe*ndvi*", "*ndvi_monthly*"):
+            candidates.extend(
+                candidate
+                for candidate in sorted(land_dir.glob(pattern))
+                if candidate.suffix.casefold() in {".csv", ".xlsx", ".xls"}
+            )
+
+    for root in collect_search_roots("BIOCUBE_NDVI_SEARCH_ROOTS", "BIOCUBE_SEARCH_ROOTS"):
+        if not root.exists():
+            continue
+        for pattern in ("Europe*ndvi*", "*ndvi_monthly*"):
+            candidates.extend(
+                candidate
+                for candidate in sorted(root.rglob(pattern))
+                if candidate.is_file() and candidate.suffix.casefold() in {".csv", ".xlsx", ".xls"}
+            )
+
+    seen: set[str] = set()
+    existing_candidates: list[Path] = []
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if candidate.exists() and candidate.is_file():
+            existing_candidates.append(candidate)
+
+    scored_candidates = [
+        (score, candidate)
+        for candidate in existing_candidates
+        if (score := ndvi_source_score(candidate)) is not None
+    ]
+    if scored_candidates:
+        return max(scored_candidates, key=lambda item: item[0])[1]
+    if existing_candidates:
+        return existing_candidates[0]
+    return None
+
+
+def vegetation_dynamic_source_score(path: Path) -> tuple[int, pd.Timestamp, int] | None:
+    try:
+        with xr.open_dataset(path, engine="netcdf4") as ds:
+            variables = {str(name).casefold() for name in ds.data_vars}
+            has_ndvi = bool({"ndvi"}.intersection(variables))
+            has_lai = {"lai_hv", "lai_lv"}.issubset(variables)
+            if not has_ndvi and not has_lai:
+                return None
+            if "valid_time" not in ds.coords:
+                return None
+            times = pd.to_datetime(ds["valid_time"].values)
+            if len(times) == 0:
+                return None
+            latest = pd.Timestamp(times.max()).to_period("M").to_timestamp()
+    except (OSError, ValueError, KeyError):
+        return None
+
+    signal_score = 2 if has_ndvi else 1
+    return signal_score, latest, int(path.stat().st_size)
+
+
+def resolve_vegetation_dynamic_source_path(biocube_dir: Path) -> Path | None:
+    candidates: list[Path] = []
+    for env_name in (
+        "BIOCUBE_VEGETATION_DYNAMIC_PATH",
+        "LAND_VEGETATION_DYNAMIC_PATH",
+        "VEGETATION_DYNAMIC_PATH",
+    ):
+        env_value = os.getenv(env_name)
+        if env_value:
+            candidates.append(Path(env_value).expanduser())
+
+    vegetation_dir = biocube_dir / "Copernicus" / "ERA5-monthly" / "era5-land-vegetation"
+    default_path = vegetation_dir / "data_stream-moda.nc"
+    candidates.extend([default_path, default_path.with_name(f"{default_path.name}.bak")])
+    if vegetation_dir.exists():
+        candidates.extend(sorted(vegetation_dir.glob("data_stream*.nc*")))
+
+    for root in collect_search_roots("BIOCUBE_VEGETATION_SEARCH_ROOTS", "BIOCUBE_SEARCH_ROOTS"):
+        if root.exists():
+            candidates.extend(sorted(root.rglob("data_stream*.nc*")))
+
+    scored: list[tuple[tuple[int, pd.Timestamp, int], Path]] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen or not candidate.exists() or not candidate.is_file():
+            continue
+        seen.add(key)
+        score = vegetation_dynamic_source_score(candidate)
+        if score is not None:
+            scored.append((score, candidate))
+
+    if not scored:
+        return None
+    return max(scored, key=lambda item: item[0])[1]
 
 
 def build_monthly_table_layer(
@@ -257,6 +549,11 @@ def build_monthly_table_layer(
     elif date_column:
         local = frame.copy()
         local["_month_start"] = pd.to_datetime(local[date_column], errors="coerce").dt.to_period("M").dt.to_timestamp()
+        local = local[local["_month_start"] == month.to_period("M").to_timestamp()]
+        selected_value_column = value_column(local, variable_name)
+    elif month_column:
+        local = frame.copy()
+        local["_month_start"] = pd.to_datetime(local[month_column], errors="coerce").dt.to_period("M").dt.to_timestamp()
         local = local[local["_month_start"] == month.to_period("M").to_timestamp()]
         selected_value_column = value_column(local, variable_name)
     else:
@@ -328,8 +625,57 @@ def merge_layer(frame: pd.DataFrame, layer: pd.DataFrame, value_column_name: str
     return frame.merge(layer, on=["latitude", "longitude"], how="left")
 
 
+def combine_primary_fallback_layer(
+    primary: pd.DataFrame,
+    fallback: pd.DataFrame,
+    value_column_name: str,
+) -> pd.DataFrame:
+    if primary.empty:
+        return fallback
+    if fallback.empty:
+        return primary
+    merged = primary.merge(
+        fallback.rename(columns={value_column_name: f"{value_column_name}_fallback"}),
+        on=["latitude", "longitude"],
+        how="outer",
+    )
+    merged[value_column_name] = merged[value_column_name].combine_first(merged[f"{value_column_name}_fallback"])
+    return merged[["latitude", "longitude", value_column_name]]
+
+
 def empty_land_layer(land_mask: xr.DataArray) -> xr.DataArray:
     return xr.full_like(land_mask, np.nan, dtype=float)
+
+
+def align_layer_to_land_mask(layer: xr.DataArray, land_mask: xr.DataArray) -> xr.DataArray:
+    if "latitude" in layer.dims and "longitude" in layer.dims:
+        layer = layer.sel(
+            latitude=xr.DataArray(land_mask["latitude"].values, dims="latitude"),
+            longitude=xr.DataArray(land_mask["longitude"].values, dims="longitude"),
+            method="nearest",
+        )
+    return layer.where(land_mask)
+
+
+def select_month_raw_dataarray(
+    ds: xr.Dataset,
+    variable_name: str,
+    month_ts: pd.Timestamp,
+) -> xr.DataArray | None:
+    if variable_name not in ds.data_vars:
+        return None
+
+    data = ds[variable_name]
+    if "valid_time" not in data.dims:
+        return data
+
+    months = pd.to_datetime(ds["valid_time"].values).to_period("M").to_timestamp()
+    target_month = month_ts.to_period("M").to_timestamp()
+    matching_indexes = np.where(months == target_month)[0]
+    if len(matching_indexes) == 0:
+        return None
+
+    return data.isel(valid_time=int(matching_indexes[0]))
 
 
 def select_month_dataarray(
@@ -338,20 +684,50 @@ def select_month_dataarray(
     month_ts: pd.Timestamp,
     land_mask: xr.DataArray,
 ) -> xr.DataArray:
-    if variable_name not in ds.data_vars:
+    selected = select_month_raw_dataarray(ds, variable_name, month_ts)
+    if selected is None:
         return empty_land_layer(land_mask)
+    return align_layer_to_land_mask(selected, land_mask)
 
-    data = ds[variable_name]
-    if "valid_time" not in data.dims:
-        return data.where(land_mask)
 
-    months = pd.to_datetime(ds["valid_time"].values).to_period("M").to_timestamp()
-    target_month = month_ts.to_period("M").to_timestamp()
-    matching_indexes = np.where(months == target_month)[0]
-    if len(matching_indexes) == 0:
-        return empty_land_layer(land_mask)
+def build_vegetation_netcdf_layer(
+    ds_vegetation: xr.Dataset | None,
+    land_mask: xr.DataArray,
+    month_ts: pd.Timestamp,
+) -> pd.DataFrame:
+    if ds_vegetation is None:
+        return pd.DataFrame(columns=["latitude", "longitude", "ndvi_mean"])
 
-    return data.isel(valid_time=int(matching_indexes[0])).where(land_mask)
+    ndvi_var = next((name for name in ("NDVI", "ndvi") if name in ds_vegetation.data_vars), None)
+    if ndvi_var is not None:
+        ndvi = select_month_raw_dataarray(ds_vegetation, ndvi_var, month_ts)
+        if ndvi is None:
+            return pd.DataFrame(columns=["latitude", "longitude", "ndvi_mean"])
+    elif {"lai_hv", "lai_lv"}.issubset(ds_vegetation.data_vars):
+        lai_hv = select_month_raw_dataarray(ds_vegetation, "lai_hv", month_ts)
+        lai_lv = select_month_raw_dataarray(ds_vegetation, "lai_lv", month_ts)
+        if lai_hv is None or lai_lv is None:
+            return pd.DataFrame(columns=["latitude", "longitude", "ndvi_mean"])
+        lai_hv = align_layer_to_land_mask(lai_hv, land_mask).fillna(0.0)
+        lai_lv = align_layer_to_land_mask(lai_lv, land_mask).fillna(0.0)
+        ndvi = (1.0 - np.exp(-0.5 * (lai_hv + lai_lv))).clip(min=0.0, max=0.92)
+    else:
+        return pd.DataFrame(columns=["latitude", "longitude", "ndvi_mean"])
+
+    ndvi = align_layer_to_land_mask(ndvi, land_mask)
+    frame = ndvi.to_dataframe(name="ndvi_mean").reset_index()
+    frame = frame.dropna(subset=["ndvi_mean"])
+    if frame.empty:
+        return pd.DataFrame(columns=["latitude", "longitude", "ndvi_mean"])
+    frame["latitude"] = frame["latitude"].round(2)
+    frame["longitude"] = frame["longitude"].round(2)
+    return (
+        frame[["latitude", "longitude", "ndvi_mean"]]
+        .assign(ndvi_mean=lambda df: pd.to_numeric(df["ndvi_mean"], errors="coerce"))
+        .dropna(subset=["ndvi_mean"])
+        .groupby(["latitude", "longitude"], as_index=False)["ndvi_mean"]
+        .mean()
+    )
 
 
 def precipitation_layers(
@@ -470,7 +846,8 @@ def resolve_selection(args: argparse.Namespace) -> tuple[str, dict[str, float], 
 
 # Risolviamo i file sorgente osservativi direttamente da BioCube.
 def resolve_source_paths(biocube_dir: Path) -> dict[str, Path]:
-    return {
+    default_ndvi_path = biocube_dir / "Land" / "Europe_ndvi_monthly_un_025.csv"
+    source_paths = {
         "species": biocube_dir / "Species" / "europe_species.parquet",
         "temperature": (
             biocube_dir
@@ -493,9 +870,13 @@ def resolve_source_paths(biocube_dir: Path) -> dict[str, Path]:
             / "era5-edaphic"
             / "era5-edaphic-0.nc"
         ),
-        "ndvi": biocube_dir / "Land" / "Europe_ndvi_monthly_un_025.csv",
+        "ndvi": resolve_ndvi_source_path(biocube_dir, default_ndvi_path) or default_ndvi_path,
         "agriculture": biocube_dir / "Agriculture" / "Europe_combined_agriculture_data.csv",
     }
+    vegetation_path = resolve_vegetation_dynamic_source_path(biocube_dir)
+    if vegetation_path is not None:
+        source_paths["vegetation"] = vegetation_path
+    return source_paths
 
 
 # Calcoliamo le specie osservate per ogni cella e mese nell'area selezionata.
@@ -587,6 +968,7 @@ def build_selected_cell_month_frame(
     ds_temp: xr.Dataset,
     ds_prec: xr.Dataset,
     ds_edaphic: xr.Dataset,
+    ds_vegetation: xr.Dataset | None,
     land_mask: xr.DataArray,
     ndvi_table: pd.DataFrame | None,
     agriculture_table: pd.DataFrame | None,
@@ -628,9 +1010,12 @@ def build_selected_cell_month_frame(
     ].copy()
     frame["latitude"] = frame["latitude"].round(2)
     frame["longitude"] = frame["longitude"].round(2)
+    ndvi_table_layer = build_monthly_table_layer(ndvi_table, month_ts, "NDVI", "ndvi_mean")
+    ndvi_vegetation_layer = build_vegetation_netcdf_layer(ds_vegetation, land_mask, month_ts)
+    ndvi_layer = combine_primary_fallback_layer(ndvi_table_layer, ndvi_vegetation_layer, "ndvi_mean")
     frame = merge_layer(
         frame,
-        build_monthly_table_layer(ndvi_table, month_ts, "NDVI", "ndvi_mean"),
+        ndvi_layer,
         "ndvi_mean",
     )
     frame = merge_layer(
@@ -758,6 +1143,28 @@ def load_climate_datasets(
     return ds_temp, ds_prec, ds_edaphic, land_mask
 
 
+def load_vegetation_dataset(
+    source_paths: dict[str, Path],
+    bounds: dict[str, float],
+    start: str,
+    end: str,
+    max_steps: int | None,
+) -> xr.Dataset | None:
+    vegetation_path = source_paths.get("vegetation")
+    if vegetation_path is None or not vegetation_path.exists():
+        return None
+
+    return subset_bbox(
+        filter_dataset_month_range(
+            subset_europe(xr.open_dataset(vegetation_path, engine="netcdf4")),
+            start=start,
+            end=end,
+            max_steps=max_steps,
+        ),
+        bounds=bounds,
+    )
+
+
 # Eseguiamo l'intera pipeline: selezione area, costruzione celle, aggregazione e salvataggio output.
 def main() -> None:
     args = build_parser().parse_args()
@@ -812,6 +1219,13 @@ def main() -> None:
         end=args.end,
         max_steps=args.max_steps,
     )
+    ds_vegetation = load_vegetation_dataset(
+        source_paths=source_paths,
+        bounds=bounds,
+        start=args.start,
+        end=args.end,
+        max_steps=args.max_steps,
+    )
     precipitation_conversion = (
         "avg_tprate kg m^-2 s^-1 -> mm/mese"
         if "avg_tprate" in ds_prec.data_vars
@@ -826,6 +1240,7 @@ def main() -> None:
                     ds_temp=ds_temp,
                     ds_prec=ds_prec,
                     ds_edaphic=ds_edaphic,
+                    ds_vegetation=ds_vegetation,
                     land_mask=land_mask,
                     ndvi_table=ndvi_table,
                     agriculture_table=agriculture_table,
@@ -837,6 +1252,8 @@ def main() -> None:
         ds_temp.close()
         ds_prec.close()
         ds_edaphic.close()
+        if ds_vegetation is not None:
+            ds_vegetation.close()
 
     if not cell_frames:
         raise SystemExit("Nessun timestep disponibile nel periodo selezionato.")
@@ -857,6 +1274,7 @@ def main() -> None:
         cell_parquet_path = base_dir / f"{stem_base}_cells.parquet"
         cell_df.to_parquet(cell_parquet_path, index=False)
 
+    vegetation_path = source_paths.get("vegetation")
     summary = {
         "mode": "selected_area_indicators",
         "selection_mode": selection_mode,
@@ -879,6 +1297,11 @@ def main() -> None:
         "precipitation_source": str(source_paths["precipitation"]),
         "edaphic_source": str(source_paths["edaphic"]),
         "ndvi_source": str(source_paths["ndvi"]) if optional_path(source_paths["ndvi"]) else None,
+        "vegetation_source": str(vegetation_path) if vegetation_path is not None and optional_path(vegetation_path) else None,
+        "ndvi_fallback_note": (
+            "NDVI usa prima la tabella Land; se il mese/cella manca, prova il dataset vegetation. "
+            "Se vegetation non contiene NDVI ma contiene lai_hv/lai_lv, il valore e una proxy dichiarata."
+        ),
         "agriculture_source": str(source_paths["agriculture"]) if optional_path(source_paths["agriculture"]) else None,
         "species_source": str(source_paths["species"]),
     }

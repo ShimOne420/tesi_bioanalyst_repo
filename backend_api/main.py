@@ -30,6 +30,17 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "local_preview"
 CITY_CATALOG_PATH = PROJECT_ROOT / "data" / "european_cities.json"
+SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from selected_area_indicators import (
+    infer_spatial_table_month_range,
+    resolve_ndvi_source_path,
+    resolve_vegetation_dynamic_source_path,
+    vegetation_dynamic_source_score,
+)
+
 load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(PROJECT_ROOT / ".env.local", override=True)
 
@@ -123,7 +134,8 @@ def get_biocube_dir() -> Path:
 # Restituiamo i path delle sorgenti BioCube usate dagli indicatori osservativi.
 def get_source_paths() -> dict[str, Path]:
     biocube_dir = get_biocube_dir()
-    return {
+    default_ndvi_path = biocube_dir / "Land" / "Europe_ndvi_monthly_un_025.csv"
+    source_paths = {
         "species": biocube_dir / "Species" / "europe_species.parquet",
         "temperature": (
             biocube_dir
@@ -146,9 +158,13 @@ def get_source_paths() -> dict[str, Path]:
             / "era5-edaphic"
             / "era5-edaphic-0.nc"
         ),
-        "ndvi": biocube_dir / "Land" / "Europe_ndvi_monthly_un_025.csv",
+        "ndvi": resolve_ndvi_source_path(biocube_dir, default_ndvi_path) or default_ndvi_path,
         "agriculture": biocube_dir / "Agriculture" / "Europe_combined_agriculture_data.csv",
     }
+    vegetation_path = resolve_vegetation_dynamic_source_path(biocube_dir)
+    if vegetation_path is not None:
+        source_paths["vegetation"] = vegetation_path
+    return source_paths
 
 
 def validate_source_paths(source_paths: dict[str, Path]) -> None:
@@ -198,8 +214,20 @@ def get_dataset_metadata() -> dict[str, Any]:
     finally:
         ds_edaphic.close()
 
-    common_start = max(species_min, temp_min, prec_min, edaphic_min)
-    common_end = min(species_max, temp_max, prec_max, edaphic_max)
+    try:
+        ndvi_range = infer_spatial_table_month_range(source_paths["ndvi"], "NDVI")
+    except (OSError, ValueError, KeyError, pd.errors.EmptyDataError, pd.errors.ParserError):
+        ndvi_range = None
+
+    vegetation_score = None
+    vegetation_path = source_paths.get("vegetation")
+    if vegetation_path is not None:
+        vegetation_score = vegetation_dynamic_source_score(vegetation_path)
+
+    # Le specie e le tabelle opzionali non devono bloccare il selettore periodo:
+    # se non hanno osservazioni in un mese, la UI mostra `n.d.` invece di chiudere il range.
+    common_start = max(temp_min, prec_min, edaphic_min)
+    common_end = min(temp_max, prec_max, edaphic_max)
 
     return {
         "period": {
@@ -222,6 +250,16 @@ def get_dataset_metadata() -> dict[str, Any]:
             "edaphic": {
                 "minMonth": edaphic_min.strftime("%Y-%m"),
                 "maxMonth": edaphic_max.strftime("%Y-%m"),
+            },
+            "ndvi": {
+                "path": str(source_paths["ndvi"]),
+                "minMonth": ndvi_range[0].strftime("%Y-%m") if ndvi_range else None,
+                "maxMonth": ndvi_range[1].strftime("%Y-%m") if ndvi_range else None,
+            },
+            "vegetation": {
+                "path": str(vegetation_path) if vegetation_path else None,
+                "maxMonth": vegetation_score[1].strftime("%Y-%m") if vegetation_score else None,
+                "sourceKind": "ndvi" if vegetation_score and vegetation_score[0] == 2 else "lai_proxy" if vegetation_score else None,
             },
         },
         "cities": load_city_catalog(),
