@@ -1,7 +1,6 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { TrendChart } from "./trend-chart";
@@ -81,6 +80,65 @@ function formatNumber(value: number | null, unit: string, decimals = 2) {
   return unit ? `${formatted} ${unit}` : formatted;
 }
 
+function isFiniteNumber(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function mean(values: Array<number | null | undefined>) {
+  const validValues = values.filter(isFiniteNumber);
+  if (!validValues.length) {
+    return null;
+  }
+
+  return validValues.reduce((total, value) => total + value, 0) / validValues.length;
+}
+
+function landCoverComposite(row: IndicatorRow) {
+  if (
+    !isFiniteNumber(row.forest_mean_area) ||
+    !isFiniteNumber(row.arable_mean_area) ||
+    !isFiniteNumber(row.cropland_mean_area)
+  ) {
+    return null;
+  }
+
+  return row.forest_mean_area - (row.arable_mean_area + row.cropland_mean_area);
+}
+
+function computeLandCoverChange(rows: IndicatorRow[]) {
+  if (rows.length < 2) {
+    return null;
+  }
+
+  const first = landCoverComposite(rows[0]);
+  const last = landCoverComposite(rows.at(-1) ?? rows[rows.length - 1]);
+  if (!isFiniteNumber(first) || !isFiniteNumber(last)) {
+    return null;
+  }
+
+  return last - first;
+}
+
+function computeNdviTrend(rows: IndicatorRow[]) {
+  const points = rows
+    .map((row, index) => ({ x: index, y: row.ndvi_mean_area }))
+    .filter((point): point is { x: number; y: number } => isFiniteNumber(point.y));
+
+  if (points.length < 2) {
+    return null;
+  }
+
+  const xMean = points.reduce((total, point) => total + point.x, 0) / points.length;
+  const yMean = points.reduce((total, point) => total + point.y, 0) / points.length;
+  const denominator = points.reduce((total, point) => total + (point.x - xMean) ** 2, 0);
+  if (denominator === 0) {
+    return null;
+  }
+
+  const numerator = points.reduce((total, point) => total + (point.x - xMean) * (point.y - yMean), 0);
+  return numerator / denominator;
+}
+
 async function readApiError(response: Response, fallback: string) {
   try {
     const payload = (await response.json()) as { detail?: unknown; error?: unknown };
@@ -141,11 +199,6 @@ const TABLE_COLUMNS: Array<{
     display: (row) => formatNumber(row.temperature_mean_area_c, "°C")
   },
   {
-    label: "Precipitazione mensile",
-    value: (row) => row.precipitation_mean_area_mm,
-    display: (row) => formatNumber(row.precipitation_mean_area_mm, row.precipitation_unit ?? "mm/mese")
-  },
-  {
     label: "NDVI",
     value: (row) => row.ndvi_mean_area,
     display: (row) => formatNumber(row.ndvi_mean_area, "", 3)
@@ -161,14 +214,29 @@ const TABLE_COLUMNS: Array<{
     display: (row) => formatNumber(row.swvl2_mean_area, "", 3)
   },
   {
+    label: "STL1",
+    value: (row) => row.stl1_mean_area,
+    display: (row) => formatNumber(row.stl1_mean_area, "", 3)
+  },
+  {
+    label: "STL2",
+    value: (row) => row.stl2_mean_area,
+    display: (row) => formatNumber(row.stl2_mean_area, "", 3)
+  },
+  {
     label: "Cropland",
     value: (row) => row.cropland_mean_area,
     display: (row) => formatNumber(row.cropland_mean_area, "", 3)
   },
   {
-    label: "Celle valide",
-    value: (row) => row.valid_cell_count ?? row.cell_count_land,
-    display: (row) => row.valid_cell_count ?? row.cell_count_land ?? "n.d."
+    label: "Arable",
+    value: (row) => row.arable_mean_area,
+    display: (row) => formatNumber(row.arable_mean_area, "", 3)
+  },
+  {
+    label: "Forest",
+    value: (row) => row.forest_mean_area,
+    display: (row) => formatNumber(row.forest_mean_area, "", 3)
   }
 ];
 
@@ -515,13 +583,18 @@ export function BiomapDashboard() {
     }
   }
 
-  const latestRow = result?.monthly.at(-1) ?? null;
+  const meanTemperature = useMemo(
+    () => mean(result?.monthly.map((row) => row.temperature_mean_area_c) ?? []),
+    [result]
+  );
+  const landCoverChange = useMemo(() => computeLandCoverChange(result?.monthly ?? []), [result]);
+  const ndviTrend = useMemo(() => computeNdviTrend(result?.monthly ?? []), [result]);
 
   return (
     <main className="page-shell">
       <section className="hero">
         <span className="eyebrow">BioMap Explorer</span>
-        <h1>Seleziona un&apos;area europea e calcola gli indicatori.</h1>
+        <h1>Ecosystem Biodiversity monitoring</h1>
         <p>
           Questa interfaccia e pensata per il progetto BioMap: puoi scegliere una citta
           europea, inserire coordinate o disegnare manualmente un rettangolo sulla mappa, definire il
@@ -768,26 +841,16 @@ export function BiomapDashboard() {
                 </strong>
               </div>
               <div className="stat-card">
-                <span>Temperatura ultimo mese</span>
-                <strong>{formatNumber(latestRow?.temperature_mean_area_c ?? null, "°C")}</strong>
+                <span>Temperatura media</span>
+                <strong>{formatNumber(meanTemperature, "°C")}</strong>
               </div>
               <div className="stat-card">
-                <span>Precipitazione ultimo mese</span>
-                <strong>
-                  {formatNumber(
-                    latestRow?.precipitation_mean_area_mm ?? null,
-                    latestRow?.precipitation_unit ?? "mm/mese"
-                  )}
-                </strong>
+                <span>Land cover change</span>
+                <strong>{formatNumber(landCoverChange, "", 3)}</strong>
               </div>
               <div className="stat-card">
-                <span>Specie osservate ultimo mese</span>
-                <strong>
-                  {latestRow?.species_count_observed_area === null ||
-                  latestRow?.species_count_observed_area === undefined
-                    ? "n.d."
-                    : latestRow.species_count_observed_area}
-                </strong>
+                <span>NDVI trend</span>
+                <strong>{formatNumber(ndviTrend, "NDVI/mese", 4)}</strong>
               </div>
             </div>
 
@@ -873,20 +936,6 @@ export function BiomapDashboard() {
                   <button className="secondary-button" type="button" onClick={() => exportTableAsExcel(result)}>
                     Esporta Excel
                   </button>
-
-                  {result.downloads ? (
-                    <>
-                    <Link className="secondary-button" href={result.downloads.csvUrl}>
-                      Scarica CSV
-                    </Link>
-                    <Link className="secondary-button" href={result.downloads.excelCsvUrl}>
-                      Scarica CSV per Excel
-                    </Link>
-                    <Link className="secondary-button" href={result.downloads.xlsxUrl}>
-                      Scarica XLSX
-                    </Link>
-                    </>
-                  ) : null}
                 </div>
 
                 <div className="table-shell">

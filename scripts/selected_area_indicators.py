@@ -576,20 +576,32 @@ def build_monthly_table_layer(
     )
 
 
-def find_yearly_column(columns: list[str], prefix: str, year: int) -> str:
-    candidates = [f"{prefix}_{year}", f"{prefix}{year}", str(year)]
+def find_yearly_column(columns: list[str], prefix: str | None, year: int) -> str:
+    columns_by_name = {str(column).casefold(): str(column) for column in columns}
+    candidates = [str(year)]
+    if prefix:
+        candidates = [f"{prefix}_{year}", f"{prefix}{year}", str(year)]
     for candidate in candidates:
-        if candidate in columns:
-            return candidate
+        match = columns_by_name.get(candidate.casefold())
+        if match is not None:
+            return match
+
+    normalized_prefix = re.sub(r"[^a-zA-Z0-9]+", "", prefix).casefold() if prefix else None
     year_columns = []
     for column in columns:
-        match = re.search(r"(?P<year>\d{4})", str(column))
+        column_text = str(column)
+        if normalized_prefix:
+            compact_column = re.sub(r"[^a-zA-Z0-9]+", "", column_text).casefold()
+            if normalized_prefix not in compact_column:
+                continue
+        match = re.search(r"(?P<year>\d{4})", column_text)
         if match:
-            year_columns.append((int(match.group("year")), str(column)))
+            year_columns.append((int(match.group("year")), column_text))
     past_or_current = [(column_year, column) for column_year, column in year_columns if column_year <= year]
     if past_or_current:
         return max(past_or_current, key=lambda item: item[0])[1]
-    raise KeyError(f"Colonna annuale {prefix}_{year} non trovata.")
+    prefix_label = prefix or "year"
+    raise KeyError(f"Colonna annuale {prefix_label}_{year} non trovata.")
 
 
 def build_annual_table_layer(
@@ -597,6 +609,7 @@ def build_annual_table_layer(
     month: pd.Timestamp,
     variable_name: str,
     output_column: str,
+    year_prefix: str | None = None,
 ) -> pd.DataFrame:
     if table is None:
         return pd.DataFrame(columns=["latitude", "longitude", output_column])
@@ -607,7 +620,11 @@ def build_annual_table_layer(
     if frame.empty:
         return pd.DataFrame(columns=["latitude", "longitude", output_column])
 
-    selected_value_column = find_yearly_column([str(column) for column in frame.columns], "Agri", month.year)
+    selected_value_column = find_yearly_column(
+        [str(column) for column in frame.columns],
+        year_prefix or variable_name,
+        month.year,
+    )
     return (
         frame[["latitude", "longitude", selected_value_column]]
         .rename(columns={selected_value_column: output_column})
@@ -872,6 +889,7 @@ def resolve_source_paths(biocube_dir: Path) -> dict[str, Path]:
         ),
         "ndvi": resolve_ndvi_source_path(biocube_dir, default_ndvi_path) or default_ndvi_path,
         "agriculture": biocube_dir / "Agriculture" / "Europe_combined_agriculture_data.csv",
+        "forest": biocube_dir / "Forest" / "Europe_forest_data.csv",
     }
     vegetation_path = resolve_vegetation_dynamic_source_path(biocube_dir)
     if vegetation_path is not None:
@@ -972,6 +990,7 @@ def build_selected_cell_month_frame(
     land_mask: xr.DataArray,
     ndvi_table: pd.DataFrame | None,
     agriculture_table: pd.DataFrame | None,
+    forest_table: pd.DataFrame | None,
     species_lookup: dict[str, pd.DataFrame],
     time_index: int,
 ) -> pd.DataFrame:
@@ -990,11 +1009,20 @@ def build_selected_cell_month_frame(
             "precipitation_mean_mm": precipitation_monthly_mm,
             "swvl1_mean": select_month_dataarray(ds_edaphic, "swvl1", month_ts, land_mask),
             "swvl2_mean": select_month_dataarray(ds_edaphic, "swvl2", month_ts, land_mask),
+            "stl1_mean": select_month_dataarray(ds_edaphic, "stl1", month_ts, land_mask),
+            "stl2_mean": select_month_dataarray(ds_edaphic, "stl2", month_ts, land_mask),
         }
     )
     frame = month_ds.to_dataframe().reset_index()
     frame = frame.dropna(
-        subset=["temperature_mean_c", "precipitation_mean_mm", "swvl1_mean", "swvl2_mean"],
+        subset=[
+            "temperature_mean_c",
+            "precipitation_mean_mm",
+            "swvl1_mean",
+            "swvl2_mean",
+            "stl1_mean",
+            "stl2_mean",
+        ],
         how="all",
     )
     frame = frame[
@@ -1006,6 +1034,8 @@ def build_selected_cell_month_frame(
             "precipitation_mean_mm",
             "swvl1_mean",
             "swvl2_mean",
+            "stl1_mean",
+            "stl2_mean",
         ]
     ].copy()
     frame["latitude"] = frame["latitude"].round(2)
@@ -1020,8 +1050,18 @@ def build_selected_cell_month_frame(
     )
     frame = merge_layer(
         frame,
-        build_annual_table_layer(agriculture_table, month_ts, "Cropland", "cropland_mean"),
+        build_annual_table_layer(agriculture_table, month_ts, "Cropland", "cropland_mean", year_prefix="Agri"),
         "cropland_mean",
+    )
+    frame = merge_layer(
+        frame,
+        build_annual_table_layer(agriculture_table, month_ts, "Arable", "arable_mean", year_prefix="Agri"),
+        "arable_mean",
+    )
+    frame = merge_layer(
+        frame,
+        build_annual_table_layer(forest_table, month_ts, "Forest", "forest_mean", year_prefix="Forest"),
+        "forest_mean",
     )
     frame["month"] = month_ts
     frame["cell_id"] = frame["latitude"].map(lambda v: f"{v:.2f}") + "_" + frame["longitude"].map(
@@ -1050,7 +1090,11 @@ def build_selected_cell_month_frame(
             "ndvi_mean",
             "swvl1_mean",
             "swvl2_mean",
+            "stl1_mean",
+            "stl2_mean",
             "cropland_mean",
+            "arable_mean",
+            "forest_mean",
         ]
     ]
 
@@ -1070,7 +1114,11 @@ def compute_area_climate_monthly(cell_df: pd.DataFrame) -> pd.DataFrame:
                 "ndvi_mean_area": weighted_mean(frame, "ndvi_mean"),
                 "swvl1_mean_area": weighted_mean(frame, "swvl1_mean"),
                 "swvl2_mean_area": weighted_mean(frame, "swvl2_mean"),
+                "stl1_mean_area": weighted_mean(frame, "stl1_mean"),
+                "stl2_mean_area": weighted_mean(frame, "stl2_mean"),
                 "cropland_mean_area": weighted_mean(frame, "cropland_mean"),
+                "arable_mean_area": weighted_mean(frame, "arable_mean"),
+                "forest_mean_area": weighted_mean(frame, "forest_mean"),
                 "valid_cell_count": int(
                     frame[
                         [
@@ -1079,7 +1127,11 @@ def compute_area_climate_monthly(cell_df: pd.DataFrame) -> pd.DataFrame:
                             "ndvi_mean",
                             "swvl1_mean",
                             "swvl2_mean",
+                            "stl1_mean",
+                            "stl2_mean",
                             "cropland_mean",
+                            "arable_mean",
+                            "forest_mean",
                         ]
                     ].notna().any(axis=1).sum()
                 ),
@@ -1211,6 +1263,11 @@ def main() -> None:
         if optional_path(source_paths["agriculture"]) is not None
         else None
     )
+    forest_table = (
+        read_spatial_table(source_paths["forest"])
+        if optional_path(source_paths["forest"]) is not None
+        else None
+    )
 
     ds_temp, ds_prec, ds_edaphic, land_mask = load_climate_datasets(
         source_paths=source_paths,
@@ -1244,6 +1301,7 @@ def main() -> None:
                     land_mask=land_mask,
                     ndvi_table=ndvi_table,
                     agriculture_table=agriculture_table,
+                    forest_table=forest_table,
                     species_lookup=species_lookup,
                     time_index=idx,
                 )
@@ -1291,7 +1349,7 @@ def main() -> None:
         "species_note": "NaN sulle specie significa che nel dataset non risultano osservazioni per quella cella o area e in quel mese",
         "precipitation_conversion": precipitation_conversion,
         "observational_schema": (
-            "monthly contiene solo valori osservativi reali: temperatura, precipitazione, NDVI, SWVL1, SWVL2, Cropland e celle valide"
+            "La dashboard osservativa espone valori reali per temperatura, NDVI, SWVL1, SWVL2, STL1, STL2, Cropland, Arable e Forest."
         ),
         "temperature_source": str(source_paths["temperature"]),
         "precipitation_source": str(source_paths["precipitation"]),
@@ -1303,6 +1361,7 @@ def main() -> None:
             "Se vegetation non contiene NDVI ma contiene lai_hv/lai_lv, il valore e una proxy dichiarata."
         ),
         "agriculture_source": str(source_paths["agriculture"]) if optional_path(source_paths["agriculture"]) else None,
+        "forest_source": str(source_paths["forest"]) if optional_path(source_paths["forest"]) else None,
         "species_source": str(source_paths["species"]),
     }
 

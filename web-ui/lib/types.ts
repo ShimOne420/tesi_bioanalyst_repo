@@ -18,14 +18,14 @@ export type CityOption = {
 export type IndicatorRow = {
   month: string;
   temperature_mean_area_c: number | null;
-  precipitation_mean_area_mm: number | null;
-  precipitation_mean_daily_area_mm?: number | null;
-  precipitation_unit?: string | null;
   ndvi_mean_area: number | null;
   swvl1_mean_area: number | null;
   swvl2_mean_area: number | null;
+  stl1_mean_area: number | null;
+  stl2_mean_area: number | null;
   cropland_mean_area: number | null;
-  valid_cell_count: number | null;
+  arable_mean_area: number | null;
+  forest_mean_area: number | null;
   cell_count_land: number | null;
   cells_with_species_records: number | null;
   species_count_observed_area: number | null;
@@ -36,11 +36,14 @@ export type CellRow = {
   latitude: number | null;
   longitude: number | null;
   temperature_mean_c: number | null;
-  precipitation_mean_mm: number | null;
   ndvi_mean: number | null;
   swvl1_mean: number | null;
   swvl2_mean: number | null;
+  stl1_mean: number | null;
+  stl2_mean: number | null;
   cropland_mean: number | null;
+  arable_mean: number | null;
+  forest_mean: number | null;
   species_count_observed_cell: number | null;
 };
 

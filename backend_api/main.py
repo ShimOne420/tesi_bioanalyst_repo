@@ -160,6 +160,7 @@ def get_source_paths() -> dict[str, Path]:
         ),
         "ndvi": resolve_ndvi_source_path(biocube_dir, default_ndvi_path) or default_ndvi_path,
         "agriculture": biocube_dir / "Agriculture" / "Europe_combined_agriculture_data.csv",
+        "forest": biocube_dir / "Forest" / "Europe_forest_data.csv",
     }
     vegetation_path = resolve_vegetation_dynamic_source_path(biocube_dir)
     if vegetation_path is not None:
@@ -276,16 +277,14 @@ def read_monthly_csv(path: Path) -> list[dict[str, Any]]:
                 {
                     "month": row["month"],
                     "temperature_mean_area_c": parse_float(row["temperature_mean_area_c"]),
-                    "precipitation_mean_area_mm": parse_float(row["precipitation_mean_area_mm"]),
-                    "precipitation_mean_daily_area_mm": parse_float(
-                        row.get("precipitation_mean_daily_area_mm")
-                    ),
-                    "precipitation_unit": row.get("precipitation_unit") or "mm/mese",
                     "ndvi_mean_area": parse_float(row.get("ndvi_mean_area")),
                     "swvl1_mean_area": parse_float(row.get("swvl1_mean_area")),
                     "swvl2_mean_area": parse_float(row.get("swvl2_mean_area")),
+                    "stl1_mean_area": parse_float(row.get("stl1_mean_area")),
+                    "stl2_mean_area": parse_float(row.get("stl2_mean_area")),
                     "cropland_mean_area": parse_float(row.get("cropland_mean_area")),
-                    "valid_cell_count": parse_int(row.get("valid_cell_count")),
+                    "arable_mean_area": parse_float(row.get("arable_mean_area")),
+                    "forest_mean_area": parse_float(row.get("forest_mean_area")),
                     "cell_count_land": parse_int(row["cell_count_land"]),
                     "cells_with_species_records": parse_int(row["cells_with_species_records"]),
                     "species_count_observed_area": parse_int(row["species_count_observed_area"]),
@@ -315,11 +314,14 @@ def read_cells_parquet(path: Path, month: str) -> list[dict[str, Any]]:
                 "latitude": nullable_float(record.get("latitude")),
                 "longitude": nullable_float(record.get("longitude")),
                 "temperature_mean_c": nullable_float(record.get("temperature_mean_c")),
-                "precipitation_mean_mm": nullable_float(record.get("precipitation_mean_mm")),
                 "ndvi_mean": nullable_float(record.get("ndvi_mean")),
                 "swvl1_mean": nullable_float(record.get("swvl1_mean")),
                 "swvl2_mean": nullable_float(record.get("swvl2_mean")),
+                "stl1_mean": nullable_float(record.get("stl1_mean")),
+                "stl2_mean": nullable_float(record.get("stl2_mean")),
                 "cropland_mean": nullable_float(record.get("cropland_mean")),
+                "arable_mean": nullable_float(record.get("arable_mean")),
+                "forest_mean": nullable_float(record.get("forest_mean")),
                 "species_count_observed_cell": nullable_int(record.get("species_count_observed_cell")),
             }
         )
@@ -446,9 +448,6 @@ def run_indicator_job(body: dict[str, Any]) -> dict[str, Any]:
         for note in [
             summary.get("species_note"),
             summary.get("observational_schema"),
-            f"Conversione precipitazione: {summary.get('precipitation_conversion')}"
-            if summary.get("precipitation_conversion")
-            else None,
         ]
         if note
     ]

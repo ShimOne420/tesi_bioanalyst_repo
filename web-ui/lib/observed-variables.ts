@@ -2,11 +2,14 @@ import type { CellRow, IndicatorRow } from "./types";
 
 export type ObservedVariableKey =
   | "temperature"
-  | "precipitation"
   | "ndvi"
   | "swvl1"
   | "swvl2"
-  | "cropland";
+  | "stl1"
+  | "stl2"
+  | "cropland"
+  | "arable"
+  | "forest";
 
 export type ObservedVariable = {
   key: ObservedVariableKey;
@@ -27,15 +30,6 @@ export const OBSERVED_VARIABLES: ObservedVariable[] = [
     palette: ["#2f5f9f", "#f2cc59", "#b54835"],
     monthlyValue: (row) => row.temperature_mean_area_c,
     cellValue: (row) => row.temperature_mean_c
-  },
-  {
-    key: "precipitation",
-    label: "Precipitazione mensile",
-    unit: "mm/mese",
-    decimals: 2,
-    palette: ["#d8f0f5", "#56a6c8", "#145a8d"],
-    monthlyValue: (row) => row.precipitation_mean_area_mm,
-    cellValue: (row) => row.precipitation_mean_mm
   },
   {
     key: "ndvi",
@@ -65,6 +59,24 @@ export const OBSERVED_VARIABLES: ObservedVariable[] = [
     cellValue: (row) => row.swvl2_mean
   },
   {
+    key: "stl1",
+    label: "STL1",
+    unit: "",
+    decimals: 3,
+    palette: ["#dbe5f6", "#f3c45f", "#b04a3c"],
+    monthlyValue: (row) => row.stl1_mean_area,
+    cellValue: (row) => row.stl1_mean
+  },
+  {
+    key: "stl2",
+    label: "STL2",
+    unit: "",
+    decimals: 3,
+    palette: ["#e9edf8", "#f0b05d", "#8f3d35"],
+    monthlyValue: (row) => row.stl2_mean_area,
+    cellValue: (row) => row.stl2_mean
+  },
+  {
     key: "cropland",
     label: "Cropland",
     unit: "",
@@ -72,6 +84,24 @@ export const OBSERVED_VARIABLES: ObservedVariable[] = [
     palette: ["#f2e7a8", "#b7b95a", "#66772f"],
     monthlyValue: (row) => row.cropland_mean_area,
     cellValue: (row) => row.cropland_mean
+  },
+  {
+    key: "arable",
+    label: "Arable",
+    unit: "",
+    decimals: 3,
+    palette: ["#f6e8c7", "#d3a85c", "#8f5f1c"],
+    monthlyValue: (row) => row.arable_mean_area,
+    cellValue: (row) => row.arable_mean
+  },
+  {
+    key: "forest",
+    label: "Forest",
+    unit: "",
+    decimals: 3,
+    palette: ["#d9ecd7", "#66a860", "#1f5b2f"],
+    monthlyValue: (row) => row.forest_mean_area,
+    cellValue: (row) => row.forest_mean
   }
 ];
 
