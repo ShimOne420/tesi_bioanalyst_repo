@@ -747,7 +747,12 @@ def load_climate_datasets(
     )
 
     if ds_temp.sizes.get("latitude", 0) == 0 or ds_temp.sizes.get("longitude", 0) == 0:
-        raise SystemExit("Il bounding box selezionato non interseca celle climatiche valide in Europa.")
+        raise SystemExit(
+            "Il bounding box selezionato non interseca celle climatiche valide in Europa. "
+            "Controlla che le coordinate siano nel dominio lat 30..75 e lon -25..45. "
+            f"Bounds ricevuti: lat {bounds['min_lat']}..{bounds['max_lat']}, "
+            f"lon {bounds['min_lon']}..{bounds['max_lon']}."
+        )
 
     land_mask = build_land_mask(ds_temp)
     return ds_temp, ds_prec, ds_edaphic, land_mask

@@ -121,6 +121,19 @@ def build_bbox_from_point(lat: float, lon: float, half_window_deg: float = 0.125
     }
 
 
+def pad_bounds_for_grid_overlap(
+    bounds: dict[str, float],
+    grid_step: float = ERA5_GRID_DEGREES,
+) -> dict[str, float]:
+    half_cell = grid_step / 2.0
+    return {
+        "min_lat": bounds["min_lat"] - half_cell,
+        "max_lat": bounds["max_lat"] + half_cell,
+        "min_lon": bounds["min_lon"] - half_cell,
+        "max_lon": bounds["max_lon"] + half_cell,
+    }
+
+
 # Allineiamo coordinate puntuali alla griglia ERA5 per evitare merge spaziali incoerenti.
 def snap_coordinates_to_grid(
     values: pd.Series,
@@ -131,9 +144,19 @@ def snap_coordinates_to_grid(
 
 # Ritagliamo un dataset xarray su un bounding box arbitrario.
 def subset_bbox(ds: xr.Dataset, bounds: dict[str, float]) -> xr.Dataset:
-    return ds.sel(
+    exact = ds.sel(
         latitude=slice(bounds["max_lat"], bounds["min_lat"]),
         longitude=slice(bounds["min_lon"], bounds["max_lon"]),
+    )
+    if exact.sizes.get("latitude", 0) and exact.sizes.get("longitude", 0):
+        return exact
+
+    # Se il rettangolo e molto piccolo puo non contenere il centro di una cella ERA5,
+    # pur intersecandone l'area. In quel caso includiamo le celle che toccano il bbox.
+    padded_bounds = pad_bounds_for_grid_overlap(bounds)
+    return ds.sel(
+        latitude=slice(padded_bounds["max_lat"], padded_bounds["min_lat"]),
+        longitude=slice(padded_bounds["min_lon"], padded_bounds["max_lon"]),
     )
 
 
