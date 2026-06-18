@@ -119,9 +119,9 @@ function computeLandCoverChange(rows: IndicatorRow[]) {
   return last - first;
 }
 
-function computeNdviTrend(rows: IndicatorRow[]) {
-  const points = rows
-    .map((row, index) => ({ x: index, y: row.ndvi_mean_area }))
+function computeLinearSlope(values: Array<number | null | undefined>) {
+  const points = values
+    .map((value, index) => ({ x: index, y: value }))
     .filter((point): point is { x: number; y: number } => isFiniteNumber(point.y));
 
   if (points.length < 2) {
@@ -137,6 +137,25 @@ function computeNdviTrend(rows: IndicatorRow[]) {
 
   const numerator = points.reduce((total, point) => total + (point.x - xMean) * (point.y - yMean), 0);
   return numerator / denominator;
+}
+
+function computeAverageSlope(
+  rows: IndicatorRow[],
+  selectors: Array<(row: IndicatorRow) => number | null | undefined>
+) {
+  const slopes = selectors
+    .map((selector) => computeLinearSlope(rows.map(selector)))
+    .filter(isFiniteNumber);
+
+  if (!slopes.length) {
+    return null;
+  }
+
+  return slopes.reduce((total, slope) => total + slope, 0) / slopes.length;
+}
+
+function computeNdviTrend(rows: IndicatorRow[]) {
+  return computeLinearSlope(rows.map((row) => row.ndvi_mean_area));
 }
 
 async function readApiError(response: Response, fallback: string) {
@@ -587,6 +606,22 @@ export function BiomapDashboard() {
     () => mean(result?.monthly.map((row) => row.temperature_mean_area_c) ?? []),
     [result]
   );
+  const thermalStressIndicator = useMemo(
+    () =>
+      computeAverageSlope(result?.monthly ?? [], [
+        (row) => row.temperature_mean_area_c,
+        (row) => row.stl1_mean_area,
+        (row) => row.stl2_mean_area
+      ]),
+    [result]
+  );
+  const soilMoistureTrend = useMemo(
+    () =>
+      computeLinearSlope(
+        (result?.monthly ?? []).map((row) => mean([row.swvl1_mean_area, row.swvl2_mean_area]))
+      ),
+    [result]
+  );
   const landCoverChange = useMemo(() => computeLandCoverChange(result?.monthly ?? []), [result]);
   const ndviTrend = useMemo(() => computeNdviTrend(result?.monthly ?? []), [result]);
 
@@ -829,16 +864,20 @@ export function BiomapDashboard() {
               </div>
             ) : null}
 
+            <p className="small-note">
+              <strong>
+                Periodo di riferimento: {result.start.slice(0, 7)} → {result.end.slice(0, 7)}
+              </strong>
+            </p>
+
             <div className="stat-grid">
               <div className="stat-card">
-                <span>Modalita dati</span>
-                <strong>{result.sourceMode}</strong>
+                <span>Thermal stress indicator</span>
+                <strong>{formatNumber(thermalStressIndicator, "°C/mese", 4)}</strong>
               </div>
               <div className="stat-card">
-                <span>Periodo</span>
-                <strong>
-                  {result.start.slice(0, 7)} → {result.end.slice(0, 7)}
-                </strong>
+                <span>Soil moisture trend</span>
+                <strong>{formatNumber(soilMoistureTrend, "", 4)}</strong>
               </div>
               <div className="stat-card">
                 <span>Temperatura media</span>
