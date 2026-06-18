@@ -61,8 +61,8 @@ export const OBSERVED_VARIABLES: ObservedVariable[] = [
   {
     key: "stl1",
     label: "STL1",
-    unit: "",
-    decimals: 3,
+    unit: "°C",
+    decimals: 2,
     palette: ["#dbe5f6", "#f3c45f", "#b04a3c"],
     monthlyValue: (row) => row.stl1_mean_area,
     cellValue: (row) => row.stl1_mean
@@ -70,8 +70,8 @@ export const OBSERVED_VARIABLES: ObservedVariable[] = [
   {
     key: "stl2",
     label: "STL2",
-    unit: "",
-    decimals: 3,
+    unit: "°C",
+    decimals: 2,
     palette: ["#e9edf8", "#f0b05d", "#8f3d35"],
     monthlyValue: (row) => row.stl2_mean_area,
     cellValue: (row) => row.stl2_mean

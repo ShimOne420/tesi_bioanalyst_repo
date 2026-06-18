@@ -22,6 +22,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+import numpy as np
 import pandas as pd
 import xarray as xr
 from dotenv import load_dotenv
@@ -43,6 +44,21 @@ from selected_area_indicators import (
 
 load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(PROJECT_ROOT / ".env.local", override=True)
+
+FORECAST_TARGET_MONTHS = ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09"]
+FORECAST_FIRST_MONTH = pd.Timestamp(f"{FORECAST_TARGET_MONTHS[0]}-01")
+FORECAST_LAST_MONTH = pd.Timestamp(f"{FORECAST_TARGET_MONTHS[-1]}-01")
+FORECAST_VARIABLE_SPECS = {
+    "temperature": {"workbook_prefix": "t2m", "output_column": "temperature_mean_c"},
+    "ndvi": {"workbook_prefix": "NDVI", "output_column": "ndvi_mean"},
+    "swvl1": {"workbook_prefix": "swvl1", "output_column": "swvl1_mean"},
+    "swvl2": {"workbook_prefix": "swvl2", "output_column": "swvl2_mean"},
+    "stl1": {"workbook_prefix": "stl1", "output_column": "stl1_mean"},
+    "stl2": {"workbook_prefix": "stl2", "output_column": "stl2_mean"},
+    "cropland": {"workbook_prefix": "Cropland", "output_column": "cropland_mean"},
+    "arable": {"workbook_prefix": "Arable", "output_column": "arable_mean"},
+    "forest": {"workbook_prefix": "Forest", "output_column": "forest_mean"},
+}
 
 
 # Configuriamo l'app FastAPI con CORS locale per la UI Next.js su localhost.
@@ -181,6 +197,51 @@ def validate_source_paths(source_paths: dict[str, Path]) -> None:
         )
 
 
+def get_forecast_cache_dir(*, strict: bool = True) -> Path | None:
+    raw_value = os.getenv("FORECAST_CACHE_DIR")
+    if not raw_value:
+        if strict:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "FORECAST_CACHE_DIR non configurata in .env o .env.local. "
+                    "Imposta la cartella `previsioni` con i run gia calcolati."
+                ),
+            )
+        return None
+
+    path = Path(raw_value).expanduser()
+    if not path.exists():
+        if strict:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"FORECAST_CACHE_DIR non trovata: {path}. Controlla il path della cartella "
+                    "`previsioni` sul computer universitario."
+                ),
+            )
+        return None
+
+    return path
+
+
+def build_forecast_metadata() -> dict[str, Any]:
+    cache_dir = get_forecast_cache_dir(strict=False)
+    available_months: list[str] = []
+    if cache_dir is not None:
+        available_months = [
+            month
+            for month in FORECAST_TARGET_MONTHS
+            if (cache_dir / month / "cell_matrix").exists()
+        ]
+
+    return {
+        "targetMonths": FORECAST_TARGET_MONTHS,
+        "availableMonths": available_months,
+        "cacheConfigured": cache_dir is not None,
+    }
+
+
 # Calcoliamo una sola volta il periodo realmente disponibile leggendo i file locali del dataset.
 @lru_cache(maxsize=1)
 def get_dataset_metadata() -> dict[str, Any]:
@@ -263,6 +324,7 @@ def get_dataset_metadata() -> dict[str, Any]:
                 "sourceKind": "ndvi" if vegetation_score and vegetation_score[0] == 2 else "lai_proxy" if vegetation_score else None,
             },
         },
+        "forecast": build_forecast_metadata(),
         "cities": load_city_catalog(),
     }
 
@@ -326,6 +388,257 @@ def read_cells_parquet(path: Path, month: str) -> list[dict[str, Any]]:
             }
         )
 
+    return records
+
+
+def parse_month_start(value: str) -> pd.Timestamp:
+    return pd.Timestamp(value).to_period("M").to_timestamp()
+
+
+def resolve_selection_bounds(body: dict[str, Any]) -> tuple[dict[str, float], str, str]:
+    selection_mode = str(body.get("selectionMode") or "").strip()
+    label_value = str(body.get("label") or body.get("city") or "selected_area")
+    label_slug = slugify(label_value)
+
+    if selection_mode == "city":
+        city = body.get("city")
+        if not city:
+            raise HTTPException(status_code=400, detail="Campo `city` mancante.")
+
+        city_config = load_city_lookup().get(str(city))
+        if city_config is None:
+            raise HTTPException(status_code=400, detail="Città non trovata nel catalogo europeo.")
+
+        half_window_deg = float(body.get("halfWindowDeg", 0.5))
+        lat = float(city_config["lat"])
+        lon = float(city_config["lon"])
+        bounds = {
+            "min_lat": lat - half_window_deg,
+            "max_lat": lat + half_window_deg,
+            "min_lon": lon - half_window_deg,
+            "max_lon": lon + half_window_deg,
+        }
+        return bounds, label_slug, selection_mode
+
+    if selection_mode == "bbox":
+        bounds = body.get("bounds") or {}
+        required = ["minLat", "maxLat", "minLon", "maxLon"]
+        missing = [key for key in required if key not in bounds]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Bounding box incompleto, mancano: {', '.join(missing)}",
+            )
+        normalized = {
+            "min_lat": float(bounds["minLat"]),
+            "max_lat": float(bounds["maxLat"]),
+            "min_lon": float(bounds["minLon"]),
+            "max_lon": float(bounds["maxLon"]),
+        }
+        return normalized, label_slug, selection_mode
+
+    raise HTTPException(status_code=400, detail="selectionMode deve essere `city` o `bbox`.")
+
+
+def get_forecast_output_paths(label_slug: str) -> dict[str, Path]:
+    return {
+        "cells_parquet": LOCAL_OUTPUT_DIR / f"forecast_{label_slug}_cells.parquet",
+    }
+
+
+def list_forecast_months_until_target(target_month: str) -> list[pd.Timestamp]:
+    month_ts = parse_month_start(target_month)
+    month_label = month_ts.strftime("%Y-%m")
+    if month_label not in FORECAST_TARGET_MONTHS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Il forecast supporta solo i mesi da 2026-04 a 2026-09. "
+                f"Hai richiesto {month_label}."
+            ),
+        )
+
+    return list(pd.period_range(start=FORECAST_FIRST_MONTH, end=month_ts, freq="M").to_timestamp())
+
+
+def forecast_cell_matrix_path(month_ts: pd.Timestamp, workbook_prefix: str) -> Path:
+    cache_dir = get_forecast_cache_dir(strict=True)
+    assert cache_dir is not None
+    return cache_dir / month_ts.strftime("%Y-%m") / "cell_matrix" / f"{workbook_prefix}_cell_matrix.xlsx"
+
+
+@lru_cache(maxsize=256)
+def read_forecast_full_grid(path_str: str) -> pd.DataFrame:
+    return pd.read_excel(Path(path_str), sheet_name="full_grid")
+
+
+def find_required_column(frame: pd.DataFrame, candidates: list[str], *, context: str) -> str:
+    normalized = {str(column).strip().casefold(): str(column) for column in frame.columns}
+    for candidate in candidates:
+        column = normalized.get(candidate.casefold())
+        if column:
+            return column
+    raise HTTPException(
+        status_code=500,
+        detail=f"Colonna richiesta non trovata in {context}. Attese: {', '.join(candidates)}",
+    )
+
+
+def locate_predicted_column(frame: pd.DataFrame, workbook_path: Path) -> str:
+    predicted_columns = [str(column) for column in frame.columns if str(column).startswith("predicted_")]
+    if not predicted_columns:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Colonna `predicted_*` non trovata nel workbook forecast {workbook_path.name}.",
+        )
+    return predicted_columns[0]
+
+
+def normalize_forecast_temperature_like(values: pd.Series, predicted_column: str) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce")
+    sample = numeric.dropna()
+    should_convert = predicted_column.endswith("_native")
+    if not should_convert and not sample.empty:
+        should_convert = float(sample.abs().median()) > 150.0
+    return numeric - 273.15 if should_convert else numeric
+
+
+def load_forecast_variable_layer(month_ts: pd.Timestamp, variable_key: str) -> pd.DataFrame:
+    spec = FORECAST_VARIABLE_SPECS[variable_key]
+    workbook_path = forecast_cell_matrix_path(month_ts, str(spec["workbook_prefix"]))
+    if not workbook_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Workbook forecast non trovato per {month_ts:%Y-%m}: {workbook_path}. "
+                "Genera o copia il run precomputato nella cartella `previsioni`."
+            ),
+        )
+
+    try:
+        frame = read_forecast_full_grid(str(workbook_path)).copy()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Non sono riuscito a leggere il workbook forecast {workbook_path.name}: {exc}",
+        ) from exc
+
+    latitude_column = find_required_column(frame, ["lat", "latitude"], context=workbook_path.name)
+    longitude_column = find_required_column(frame, ["lon", "longitude"], context=workbook_path.name)
+    predicted_column = locate_predicted_column(frame, workbook_path)
+
+    layer = frame[[latitude_column, longitude_column, predicted_column]].copy()
+    layer.columns = ["latitude", "longitude", str(spec["output_column"])]
+    layer["latitude"] = pd.to_numeric(layer["latitude"], errors="coerce")
+    layer["longitude"] = pd.to_numeric(layer["longitude"], errors="coerce")
+
+    if variable_key in {"temperature", "stl1", "stl2"}:
+        layer[str(spec["output_column"])] = normalize_forecast_temperature_like(
+            layer[str(spec["output_column"])],
+            predicted_column,
+        )
+    else:
+        layer[str(spec["output_column"])] = pd.to_numeric(
+            layer[str(spec["output_column"])],
+            errors="coerce",
+        )
+
+    return layer[["latitude", "longitude", str(spec["output_column"])]]
+
+
+def select_bounds(frame: pd.DataFrame, bounds: dict[str, float]) -> pd.DataFrame:
+    return frame[
+        (frame["latitude"] >= bounds["min_lat"])
+        & (frame["latitude"] <= bounds["max_lat"])
+        & (frame["longitude"] >= bounds["min_lon"])
+        & (frame["longitude"] <= bounds["max_lon"])
+    ].copy()
+
+
+def build_forecast_month_cell_frame(month_ts: pd.Timestamp, bounds: dict[str, float]) -> pd.DataFrame:
+    merged: pd.DataFrame | None = None
+    for variable_key in FORECAST_VARIABLE_SPECS:
+        layer = load_forecast_variable_layer(month_ts, variable_key)
+        merged = layer if merged is None else merged.merge(layer, on=["latitude", "longitude"], how="outer")
+
+    assert merged is not None
+    merged["latitude"] = merged["latitude"].round(2)
+    merged["longitude"] = merged["longitude"].round(2)
+    merged = select_bounds(merged, bounds)
+    if merged.empty:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Il bounding box selezionato non interseca celle forecast valide nel cache "
+                f"per il mese {month_ts:%Y-%m}."
+            ),
+        )
+
+    merged["month"] = month_ts
+    merged["cell_id"] = merged["latitude"].map(lambda value: f"{value:.2f}") + "_" + merged["longitude"].map(
+        lambda value: f"{value:.2f}"
+    )
+    merged["latitude_weight"] = merged["latitude"].map(lambda value: float(np.cos(np.radians(value))))
+    merged["species_count_observed_cell"] = pd.Series([pd.NA] * len(merged), dtype="Int64")
+    return merged[
+        [
+            "month",
+            "latitude",
+            "longitude",
+            "cell_id",
+            "latitude_weight",
+            "species_count_observed_cell",
+            "temperature_mean_c",
+            "ndvi_mean",
+            "swvl1_mean",
+            "swvl2_mean",
+            "stl1_mean",
+            "stl2_mean",
+            "cropland_mean",
+            "arable_mean",
+            "forest_mean",
+        ]
+    ]
+
+
+def weighted_mean(frame: pd.DataFrame, column: str) -> float | None:
+    values = pd.to_numeric(frame[column], errors="coerce")
+    weights = pd.to_numeric(frame["latitude_weight"], errors="coerce")
+    valid_mask = values.notna() & weights.notna()
+    if not valid_mask.any():
+        return None
+
+    valid_values = values[valid_mask].to_numpy(dtype=np.float64)
+    valid_weights = weights[valid_mask].to_numpy(dtype=np.float64)
+    weight_sum = float(valid_weights.sum())
+    if weight_sum == 0.0:
+        return None
+
+    return float(np.average(valid_values, weights=valid_weights))
+
+
+def compute_forecast_monthly(cell_df: pd.DataFrame) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for month, frame in cell_df.groupby("month", sort=True):
+        records.append(
+            {
+                "month": str(pd.Timestamp(month).date()),
+                "temperature_mean_area_c": weighted_mean(frame, "temperature_mean_c"),
+                "ndvi_mean_area": weighted_mean(frame, "ndvi_mean"),
+                "swvl1_mean_area": weighted_mean(frame, "swvl1_mean"),
+                "swvl2_mean_area": weighted_mean(frame, "swvl2_mean"),
+                "stl1_mean_area": weighted_mean(frame, "stl1_mean"),
+                "stl2_mean_area": weighted_mean(frame, "stl2_mean"),
+                "cropland_mean_area": weighted_mean(frame, "cropland_mean"),
+                "arable_mean_area": weighted_mean(frame, "arable_mean"),
+                "forest_mean_area": weighted_mean(frame, "forest_mean"),
+                "cell_count_land": int(len(frame)),
+                "cells_with_species_records": 0,
+                "species_count_observed_area": None,
+            }
+        )
     return records
 
 
@@ -454,6 +767,7 @@ def run_indicator_job(body: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "status": "ok",
+        "dashboardMode": "observed",
         "sourceMode": "local",
         "label": summary["label"],
         "selectionMode": body.get("selectionMode", summary["selection_mode"]),
@@ -473,6 +787,49 @@ def run_indicator_job(body: dict[str, Any]) -> dict[str, Any]:
             "excelCsvUrl": f"/api/download/{label_slug}/excel_csv",
             "xlsxUrl": f"/api/download/{label_slug}/xlsx",
         },
+    }
+
+
+def run_forecast_cache_job(body: dict[str, Any]) -> dict[str, Any]:
+    LOCAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    bounds, label_slug, selection_mode = resolve_selection_bounds(body)
+    target_month = str(body.get("targetMonth") or "").strip()
+    if not target_month:
+        raise HTTPException(status_code=400, detail="Il campo `targetMonth` e obbligatorio per il forecast.")
+
+    months = list_forecast_months_until_target(target_month)
+    month_frames = [build_forecast_month_cell_frame(month_ts, bounds) for month_ts in months]
+    cell_df = pd.concat(month_frames, ignore_index=True)
+    output_paths = get_forecast_output_paths(label_slug)
+    cell_df.to_parquet(output_paths["cells_parquet"], index=False)
+
+    notes = [
+        "Forecast caricato da cache precomputata: il frontend non esegue run live del modello.",
+    ]
+    if len(months) == 1:
+        notes.append(f"Modalita one-step: mese previsto {months[0]:%Y-%m}.")
+    else:
+        notes.append(f"Rollout multi-step caricato da {months[0]:%Y-%m} a {months[-1]:%Y-%m}.")
+
+    return {
+        "status": "ok",
+        "dashboardMode": "forecast",
+        "sourceMode": "forecast_cache",
+        "label": label_slug,
+        "selectionMode": selection_mode,
+        "bounds": {
+            "minLat": bounds["min_lat"],
+            "maxLat": bounds["max_lat"],
+            "minLon": bounds["min_lon"],
+            "maxLon": bounds["max_lon"],
+        },
+        "start": str(months[0].date()),
+        "end": str(months[-1].date()),
+        "targetMonth": str(months[-1].date()),
+        "forecastMonths": [str(month.date()) for month in months],
+        "monthly": compute_forecast_monthly(cell_df),
+        "cellsUrl": f"/api/forecast/cells/{label_slug}",
+        "notes": notes,
     }
 
 
@@ -503,10 +860,26 @@ def indicators(body: dict[str, Any]) -> dict[str, Any]:
     return run_indicator_job(body)
 
 
+@app.post("/api/forecast")
+def forecast(body: dict[str, Any]) -> dict[str, Any]:
+    return run_forecast_cache_job(body)
+
+
 @app.get("/api/cells/{label}")
 def cells(label: str, month: str) -> dict[str, Any]:
     label_slug = slugify(label)
     output_paths = get_output_paths(label_slug)
+    return {
+        "label": label_slug,
+        "month": pd.Timestamp(month).to_period("M").to_timestamp().strftime("%Y-%m-%d"),
+        "cells": read_cells_parquet(output_paths["cells_parquet"], month),
+    }
+
+
+@app.get("/api/forecast/cells/{label}")
+def forecast_cells(label: str, month: str) -> dict[str, Any]:
+    label_slug = slugify(label)
+    output_paths = get_forecast_output_paths(label_slug)
     return {
         "label": label_slug,
         "month": pd.Timestamp(month).to_period("M").to_timestamp().strftime("%Y-%m-%d"),

@@ -20,7 +20,7 @@ PRECIPITATION_AUDIT = {
 def convert_display_values(variable_name: str, values: np.ndarray) -> tuple[np.ndarray, str]:
     """Convert native model values to the display units used by exports and UI."""
     array = np.asarray(values, dtype=np.float32)
-    if variable_name in {"t2m", "d2m"}:
+    if variable_name in {"t2m", "d2m", "stl1", "stl2"}:
         return array - 273.15, "°C"
     if variable_name == "tp":
         return array * 1000.0, PRECIPITATION_UNIT_LABEL

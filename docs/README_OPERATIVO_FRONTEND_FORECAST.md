@@ -11,6 +11,8 @@ Questo documento definisce il flusso operativo per:
 
 La regola principale e semplice: la vista osservativa validata resta stabile, mentre il forecast entra in un branch dedicato e con contratto dati separato.
 
+Aggiornamento operativo: la UI forecast non lancia run live dal frontend. Legge invece i run gia pubblicati nel cache `previsioni/YYYY-MM/cell_matrix`.
+
 ## 1. Validare La Parte Osservativa Su `main`
 
 Prima di qualsiasi lavoro forecast, validare `main` sulla macchina universitaria Broan con dati reali BioCube.
@@ -43,6 +45,7 @@ Creare o aggiornare `.env.local` nella root del repository:
 BIOCUBE_DIR=F:/biomap_store/biocube
 PROJECT_OUTPUT_DIR=F:/biomap_store/outputs/local_preview
 BIOANALYST_MODEL_DIR=models
+FORECAST_CACHE_DIR=F:/output/previsioni 3.0/previsioni
 ```
 
 Se il BioCube e in un path diverso, modificare solo `BIOCUBE_DIR` mantenendo il formato con slash `/`.
@@ -156,18 +159,17 @@ Regole del branch:
 Aggiungere un toggle alto:
 
 ```text
-Osservativo | Previsionale
+Osservazione | Previsione
 ```
 
 La modalita `Osservativo` resta identica.
 
-La modalita `Previsionale` riusa l'area selezionata, ma ha un contratto separato:
+La modalita `Previsione` riusa l'area selezionata, ma ha un contratto separato:
 
 - area da citta, mappa o coordinate;
-- due mesi osservati come input del modello;
-- un mese futuro come output;
+- un mese target scelto in UI;
+- mesi forecast letti dal cache gia calcolato;
 - valori previsti;
-- metadati del run;
 - nessun confronto con osservati nella UI.
 
 ### Endpoint backend da aggiungere
@@ -176,26 +178,29 @@ Contratto minimo consigliato:
 
 ```text
 POST /api/forecast
-GET /api/forecast/{label}
-GET /api/forecast/{label}/cells?month=YYYY-MM
-GET /api/forecast/{label}/download
+GET /api/forecast/cells/{label}?month=YYYY-MM
 ```
 
 `POST /api/forecast` deve:
 
-- ricevere area e mesi input;
-- lanciare il runner nativo one-step;
-- forzare la modalita senza confronto osservato;
-- convertire l'output nativo in formato BIOMAP minimale;
-- restituire label, bounds, input months, forecast month, summary e link agli output.
+- ricevere area e mese target;
+- risolvere la sequenza forecast da `2026-04` al mese target;
+- leggere i workbook `cell_matrix` dal cache;
+- ritagliare il `full_grid` sulle coordinate dell'area selezionata;
+- restituire label, bounds, mesi forecast, summary e link celle.
 
 ### Comando tecnico iniziale
 
 Su Broan:
 
 ```powershell
-python scripts/forecast_native_one_step.py --city madrid --start 2020-11-01 --end 2020-12-01 --checkpoint small --device cuda --no-compare-observed
-python scripts/native_to_biomap.py --run-dir F:\biomap_store\outputs\local_preview\model_forecast\madrid_2020_12_native_one_step
+python scripts/run.py --city madrid --start 2026-02-01 --end 2026-03-01 --group climate --variable t2m --checkpoint small --device cuda --no-compare-observed
+```
+
+Questo comando pubblica il one-step di aprile 2026 dentro:
+
+```text
+FORECAST_CACHE_DIR/2026-04/cell_matrix
 ```
 
 ### Output UI one-step
@@ -203,16 +208,13 @@ python scripts/native_to_biomap.py --run-dir F:\biomap_store\outputs\local_previ
 La UI forecast one-step deve mostrare:
 
 - area selezionata;
-- mesi input;
 - mese previsto;
-- checkpoint;
-- device;
 - tabella valori previsti;
 - export tabella;
 - mappa previsiva se sono disponibili celle o matrici esportabili;
 - grafico solo se esiste una serie temporale forecast.
 
-Nota importante: l'adapter BIOMAP attuale esporta forecast minimo per temperatura, precipitazione e species proxy. NDVI, SWVL1, SWVL2 e Cropland forecast vanno aggiunti solo dopo verifica che siano disponibili, correttamente mappati e scientificamente descrivibili.
+Nel flusso attuale il frontend legge direttamente i workbook forecast cache per: temperatura, NDVI, SWVL1, SWVL2, STL1, STL2, Cropland, Arable, Forest.
 
 ## 5. Implementare Rollout Multi-Step
 
@@ -231,8 +233,7 @@ Regola operativa:
 ### Comando tecnico per 6 mesi
 
 ```powershell
-python scripts/forecast_native_rollout.py --city madrid --start 2020-11-01 --end 2020-12-01 --checkpoint small --device cuda --steps 6
-python scripts/native_to_biomap.py --run-dir F:\biomap_store\outputs\local_preview\model_forecast\madrid_2020_12_native_rollout_6m
+python scripts/run_rollout.py --city madrid --start 2026-02-01 --end 2026-03-01 --checkpoint small --device cuda --steps 6
 ```
 
 ### Comando tecnico per 12 mesi

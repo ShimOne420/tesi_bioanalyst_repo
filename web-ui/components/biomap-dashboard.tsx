@@ -13,6 +13,7 @@ import {
 import type {
   CellRow,
   CellsResponse,
+  DashboardMode,
   DatasetMetadata,
   IndicatorResponse,
   IndicatorRow,
@@ -43,6 +44,15 @@ type CoordinateForm = {
   minLon: string;
   maxLon: string;
 };
+
+const FALLBACK_FORECAST_TARGET_MONTHS = [
+  "2026-04",
+  "2026-05",
+  "2026-06",
+  "2026-07",
+  "2026-08",
+  "2026-09"
+];
 
 function toMonthStart(value: string) {
   return `${value}-01`;
@@ -235,12 +245,12 @@ const TABLE_COLUMNS: Array<{
   {
     label: "STL1",
     value: (row) => row.stl1_mean_area,
-    display: (row) => formatNumber(row.stl1_mean_area, "", 3)
+    display: (row) => formatNumber(row.stl1_mean_area, "°C")
   },
   {
     label: "STL2",
     value: (row) => row.stl2_mean_area,
-    display: (row) => formatNumber(row.stl2_mean_area, "", 3)
+    display: (row) => formatNumber(row.stl2_mean_area, "°C")
   },
   {
     label: "Cropland",
@@ -337,11 +347,13 @@ function exportTableAsExcel(result: IndicatorResponse) {
 }
 
 export function BiomapDashboard() {
+  const [dashboardMode, setDashboardMode] = useState<DashboardMode>("observed");
   const [selectedCity, setSelectedCity] = useState<string>("");
   const [cityQuery, setCityQuery] = useState<string>("");
   const [halfWindowDeg, setHalfWindowDeg] = useState<number>(0.5);
   const [startMonth, setStartMonth] = useState<string>("");
   const [endMonth, setEndMonth] = useState<string>("");
+  const [forecastTargetMonth, setForecastTargetMonth] = useState<string>(FALLBACK_FORECAST_TARGET_MONTHS[0]);
   const [manualBounds, setManualBounds] = useState<SelectionBounds | null>(null);
   const [areaSource, setAreaSource] = useState<AreaSource>("city");
   const [coordinateForm, setCoordinateForm] = useState<CoordinateForm>({
@@ -380,6 +392,9 @@ export function BiomapDashboard() {
         setMetadata(payload);
         setStartMonth(payload.period.minMonth);
         setEndMonth(payload.period.maxMonth);
+        if (payload.forecast?.targetMonths?.length) {
+          setForecastTargetMonth(payload.forecast.targetMonths[0]);
+        }
 
         if (payload.cities.length) {
           const defaultCity =
@@ -417,6 +432,13 @@ export function BiomapDashboard() {
       setSelectedCity(cityOptions[0].value);
     }
   }, [cityOptions, selectedCity]);
+
+  useEffect(() => {
+    setResult(null);
+    setCellRows([]);
+    setCellsError("");
+    setError("");
+  }, [dashboardMode]);
 
   const selectedCityConfig = useMemo(
     () => cityOptions.find((city) => city.value === selectedCity) ?? null,
@@ -459,6 +481,18 @@ export function BiomapDashboard() {
     return enumerateMonths(metadata.period.minMonth, metadata.period.maxMonth);
   }, [metadata]);
 
+  const forecastTargetMonths = useMemo(() => {
+    return metadata?.forecast?.targetMonths?.length
+      ? metadata.forecast.targetMonths
+      : FALLBACK_FORECAST_TARGET_MONTHS;
+  }, [metadata]);
+
+  useEffect(() => {
+    if (!forecastTargetMonths.includes(forecastTargetMonth)) {
+      setForecastTargetMonth(forecastTargetMonths[0] ?? FALLBACK_FORECAST_TARGET_MONTHS[0]);
+    }
+  }, [forecastTargetMonth, forecastTargetMonths]);
+
   const activeBounds = manualBounds ?? cityPreviewBounds;
   const activeAreaLabel = manualBounds
     ? areaSource === "coordinates"
@@ -467,6 +501,7 @@ export function BiomapDashboard() {
     : "Citta";
   const selectedVariable = getObservedVariable(selectedVariableKey);
   const outputMonths = result?.monthly.map((row) => row.month) ?? [];
+  const dashboardModeLabel = dashboardMode === "forecast" ? "previsione" : "osservazione";
 
   useEffect(() => {
     if (!result?.monthly.length) {
@@ -546,12 +581,12 @@ export function BiomapDashboard() {
       return;
     }
 
-    if (!startMonth || !endMonth) {
+    if (dashboardMode === "observed" && (!startMonth || !endMonth)) {
       setError("Il periodo non e ancora pronto: attendi il caricamento dei metadati.");
       return;
     }
 
-    if (startMonth > endMonth) {
+    if (dashboardMode === "observed" && startMonth > endMonth) {
       setError("La data iniziale non puo essere successiva alla data finale.");
       return;
     }
@@ -559,25 +594,34 @@ export function BiomapDashboard() {
     setError("");
     setLoading(true);
 
-    const body = manualBounds
+    const baseBody = manualBounds
       ? {
           selectionMode: "bbox" as const,
           label: areaSource === "coordinates" ? "coordinate_area" : "manual_area",
-          bounds: manualBounds,
-          start: toMonthStart(startMonth),
-          end: toMonthStart(endMonth)
+          bounds: manualBounds
         }
       : {
           selectionMode: "city" as const,
           city: selectedCityConfig?.value,
           label: selectedCityConfig?.value,
-          halfWindowDeg,
-          start: toMonthStart(startMonth),
-          end: toMonthStart(endMonth)
+          halfWindowDeg
         };
 
+    const endpoint = dashboardMode === "forecast" ? "/api/forecast" : "/api/indicators";
+    const body =
+      dashboardMode === "forecast"
+        ? {
+            ...baseBody,
+            targetMonth: toMonthStart(forecastTargetMonth)
+          }
+        : {
+            ...baseBody,
+            start: toMonthStart(startMonth),
+            end: toMonthStart(endMonth)
+          };
+
     try {
-      const response = await fetch("/api/indicators", {
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -627,13 +671,30 @@ export function BiomapDashboard() {
 
   return (
     <main className="page-shell">
+      <div className="mode-toggle" role="tablist" aria-label="Modalita dashboard">
+        <button
+          className={`mode-toggle-button ${dashboardMode === "observed" ? "active" : ""}`}
+          type="button"
+          onClick={() => setDashboardMode("observed")}
+        >
+          Osservazione
+        </button>
+        <button
+          className={`mode-toggle-button ${dashboardMode === "forecast" ? "active" : ""}`}
+          type="button"
+          onClick={() => setDashboardMode("forecast")}
+        >
+          Previsione
+        </button>
+      </div>
+
       <section className="hero">
         <span className="eyebrow">BioMap Explorer</span>
         <h1>Ecosystem Biodiversity monitoring</h1>
         <p>
           Questa interfaccia e pensata per il progetto BioMap: puoi scegliere una citta
-          europea, inserire coordinate o disegnare manualmente un rettangolo sulla mappa, definire il
-          periodo e ottenere in output gli indicatori osservativi reali dell&apos;area.
+          europea, inserire coordinate o disegnare manualmente un rettangolo sulla mappa, poi
+          passare da osservazione a previsione mantenendo la stessa area di lavoro.
         </p>
       </section>
 
@@ -643,7 +704,8 @@ export function BiomapDashboard() {
             <h2 className="section-title">Controlli</h2>
             <p className="section-copy">
               Citta, coordinate e rettangolo sulla mappa sono alternative. L&apos;ultima
-              selezione manuale impostata diventa l&apos;area attiva.
+              selezione manuale impostata diventa l&apos;area attiva. La modalita attuale e{" "}
+              <strong>{dashboardModeLabel}</strong>.
             </p>
 
             <div className="controls-grid">
@@ -692,51 +754,83 @@ export function BiomapDashboard() {
                 />
               </div>
 
-              <div className="field-row">
+              {dashboardMode === "observed" ? (
+                <>
+                  <div className="field-row">
+                    <div className="field-group">
+                      <label htmlFor="start-month">Mese iniziale</label>
+                      <select
+                        id="start-month"
+                        value={startMonth}
+                        onChange={(event) => setStartMonth(event.target.value)}
+                        disabled={!availableMonths.length}
+                      >
+                        {!availableMonths.length ? (
+                          <option value="">Caricamento periodo...</option>
+                        ) : null}
+                        {availableMonths.map((month) => (
+                          <option key={month} value={month}>
+                            {formatMonthLabel(month)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="field-group">
+                      <label htmlFor="end-month">Mese finale</label>
+                      <select
+                        id="end-month"
+                        value={endMonth}
+                        onChange={(event) => setEndMonth(event.target.value)}
+                        disabled={!availableMonths.length}
+                      >
+                        {!availableMonths.length ? (
+                          <option value="">Caricamento periodo...</option>
+                        ) : null}
+                        {availableMonths.map((month) => (
+                          <option key={month} value={month}>
+                            {formatMonthLabel(month)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {metadata ? (
+                    <p className="small-note">
+                      Periodo disponibile nel dataset: {metadata.period.minMonth} → {metadata.period.maxMonth}
+                    </p>
+                  ) : null}
+                </>
+              ) : (
                 <div className="field-group">
-                  <label htmlFor="start-month">Mese iniziale</label>
+                  <label htmlFor="forecast-target-month">Mese da prevedere</label>
                   <select
-                    id="start-month"
-                    value={startMonth}
-                    onChange={(event) => setStartMonth(event.target.value)}
-                    disabled={!availableMonths.length}
+                    id="forecast-target-month"
+                    value={forecastTargetMonth}
+                    onChange={(event) => setForecastTargetMonth(event.target.value)}
                   >
-                    {!availableMonths.length ? (
-                      <option value="">Caricamento periodo...</option>
-                    ) : null}
-                    {availableMonths.map((month) => (
+                    {forecastTargetMonths.map((month) => (
                       <option key={month} value={month}>
                         {formatMonthLabel(month)}
                       </option>
                     ))}
                   </select>
+                  <p className="small-note">
+                    {forecastTargetMonth === "2026-04"
+                      ? "Aprile 2026 usa il forecast one-step."
+                      : `La selezione ${forecastTargetMonth} usa il rollout multi-step da 2026-04 al mese target.`}
+                    {metadata?.forecast?.cacheConfigured === false
+                      ? " Configura FORECAST_CACHE_DIR per leggere i run gia salvati."
+                      : null}
+                  </p>
+                  {metadata?.forecast?.availableMonths?.length ? (
+                    <p className="small-note">
+                      Cache disponibile: {metadata.forecast.availableMonths.join(", ")}
+                    </p>
+                  ) : null}
                 </div>
-
-                <div className="field-group">
-                  <label htmlFor="end-month">Mese finale</label>
-                  <select
-                    id="end-month"
-                    value={endMonth}
-                    onChange={(event) => setEndMonth(event.target.value)}
-                    disabled={!availableMonths.length}
-                  >
-                    {!availableMonths.length ? (
-                      <option value="">Caricamento periodo...</option>
-                    ) : null}
-                    {availableMonths.map((month) => (
-                      <option key={month} value={month}>
-                        {formatMonthLabel(month)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {metadata ? (
-                <p className="small-note">
-                  Periodo disponibile nel dataset: {metadata.period.minMonth} → {metadata.period.maxMonth}
-                </p>
-              ) : null}
+              )}
 
               <div className="field-group">
                 <label>Coordinate bounding box</label>
@@ -805,8 +899,12 @@ export function BiomapDashboard() {
                 )}
                 <br />
                 <br />
-                <strong>Periodo selezionato:</strong>{" "}
-                {startMonth && endMonth ? `${startMonth} → ${endMonth}` : "n.d."}
+                <strong>{dashboardMode === "forecast" ? "Mese target:" : "Periodo selezionato:"}</strong>{" "}
+                {dashboardMode === "forecast"
+                  ? forecastTargetMonth
+                  : startMonth && endMonth
+                    ? `${startMonth} → ${endMonth}`
+                    : "n.d."}
               </div>
 
               <div className="action-row">
@@ -828,7 +926,8 @@ export function BiomapDashboard() {
 
               <p className="small-note">
                 Se le specie risultano spesso vuote su aree molto piccole, allarga la finestra
-                della citta oppure seleziona un rettangolo piu grande.
+                della citta oppure seleziona un rettangolo piu grande. In modalita forecast il
+                frontend legge solo run gia salvati nella cache `previsioni`.
               </p>
 
               {error ? <div className="status error">{error}</div> : null}
@@ -864,10 +963,8 @@ export function BiomapDashboard() {
               </div>
             ) : null}
 
-            <p className="small-note">
-              <strong>
-                Periodo di riferimento: {result.start.slice(0, 7)} → {result.end.slice(0, 7)}
-              </strong>
+            <p className="period-heading">
+              Periodo di riferimento: {result.start.slice(0, 7)} → {result.end.slice(0, 7)}
             </p>
 
             <div className="stat-grid">
@@ -895,7 +992,9 @@ export function BiomapDashboard() {
 
             <div className="panel">
               <div className="panel-inner">
-                <h2 className="section-title">Mappa tematica osservativa</h2>
+                <h2 className="section-title">
+                  Mappa tematica {result.dashboardMode === "forecast" ? "forecast" : "osservativa"}
+                </h2>
                 <p className="section-copy">
                   Visualizza la variabile selezionata sulle celle dell&apos;area calcolata.
                 </p>
@@ -948,7 +1047,9 @@ export function BiomapDashboard() {
 
             <div className="panel">
               <div className="panel-inner">
-                <h2 className="section-title">Trend osservativo</h2>
+                <h2 className="section-title">
+                  Trend {result.dashboardMode === "forecast" ? "forecast" : "osservativo"}
+                </h2>
                 <p className="section-copy">
                   Andamento di {selectedVariable.label.toLowerCase()} nel periodo calcolato.
                 </p>
@@ -958,10 +1059,13 @@ export function BiomapDashboard() {
 
             <div className="panel">
               <div className="panel-inner">
-                <h2 className="section-title">Output osservativo mensile</h2>
+                <h2 className="section-title">
+                  Output {result.dashboardMode === "forecast" ? "forecast" : "osservativo"} mensile
+                </h2>
                 <p className="section-copy">
-                  Tabella dell&apos;area selezionata con variabili osservate in colonna. La
-                  sezione forecast/backtest resta separata e non entra in questa vista.
+                  {result.dashboardMode === "forecast"
+                    ? "Tabella mensile del rollout forecast caricato da cache. Non viene eseguito alcun run live dal frontend."
+                    : "Tabella dell&apos;area selezionata con variabili osservate in colonna. La sezione forecast/backtest resta separata e non entra in questa vista."}
                 </p>
 
                 <p className="small-note">
@@ -1005,8 +1109,9 @@ export function BiomapDashboard() {
             <div className="panel-inner">
               <h2 className="section-title">Output</h2>
               <p className="section-copy">
-                Seleziona una citta, inserisci coordinate oppure disegna un rettangolo sulla mappa, scegli il
-                periodo e premi il pulsante di conferma per vedere gli indicatori.
+                Seleziona una citta, inserisci coordinate oppure disegna un rettangolo sulla mappa, scegli{" "}
+                {dashboardMode === "forecast" ? "il mese target" : "il periodo"} e premi il pulsante di
+                conferma per vedere gli indicatori.
               </p>
 
               {activeBounds ? (

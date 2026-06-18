@@ -1009,8 +1009,8 @@ def build_selected_cell_month_frame(
             "precipitation_mean_mm": precipitation_monthly_mm,
             "swvl1_mean": select_month_dataarray(ds_edaphic, "swvl1", month_ts, land_mask),
             "swvl2_mean": select_month_dataarray(ds_edaphic, "swvl2", month_ts, land_mask),
-            "stl1_mean": select_month_dataarray(ds_edaphic, "stl1", month_ts, land_mask),
-            "stl2_mean": select_month_dataarray(ds_edaphic, "stl2", month_ts, land_mask),
+            "stl1_mean": select_month_dataarray(ds_edaphic, "stl1", month_ts, land_mask) - 273.15,
+            "stl2_mean": select_month_dataarray(ds_edaphic, "stl2", month_ts, land_mask) - 273.15,
         }
     )
     frame = month_ds.to_dataframe().reset_index()

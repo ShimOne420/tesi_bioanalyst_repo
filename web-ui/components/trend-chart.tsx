@@ -73,7 +73,7 @@ export function TrendChart({ rows, variable }: TrendChartProps) {
       </div>
 
       <svg className="trend-svg" viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`} role="img">
-        <title>{`Trend osservativo ${variable.label}`}</title>
+        <title>{`Trend ${variable.label}`}</title>
         <line
           x1={PADDING.left}
           y1={CHART_HEIGHT - PADDING.bottom}

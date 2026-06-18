@@ -69,14 +69,19 @@ export type DownloadLinks = {
   xlsxUrl: string;
 };
 
+export type DashboardMode = "observed" | "forecast";
+
 export type IndicatorResponse = {
   status: "ok";
-  sourceMode: "local" | "proxy";
+  dashboardMode: DashboardMode;
+  sourceMode: "local" | "proxy" | "forecast_cache";
   label: string;
   selectionMode: "city" | "bbox";
   bounds: SelectionBounds;
   start: string;
   end: string;
+  targetMonth?: string;
+  forecastMonths?: string[];
   monthly: IndicatorRow[];
   cellsUrl?: string;
   // Reserved for a future forecast/backtest view; the main dashboard ignores it.
@@ -95,6 +100,11 @@ export type DatasetMetadata = {
   period: {
     minMonth: string;
     maxMonth: string;
+  };
+  forecast?: {
+    targetMonths: string[];
+    availableMonths: string[];
+    cacheConfigured: boolean;
   };
   cities: CityOption[];
   note?: string;
