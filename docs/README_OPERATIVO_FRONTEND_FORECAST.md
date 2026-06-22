@@ -13,6 +13,46 @@ La regola principale e semplice: la vista osservativa validata resta stabile, me
 
 Aggiornamento operativo: la UI forecast non lancia run live dal frontend. Legge invece i run gia pubblicati nel cache `previsioni/YYYY-MM/cell_matrix`.
 
+## Lavorare Senza Computer Universitario
+
+Se non hai accesso a Broan, puoi comunque testare quasi tutta la parte forecast in locale:
+
+1. usare i run storici gia presenti in `outputs/local_preview/model_forecast`;
+2. pubblicarli in una cartella cache locale `previsioni`;
+3. configurare temporaneamente i mesi forecast via `.env.local`;
+4. avviare backend e frontend contro quella cache locale.
+
+Esempio root `.env.local` per smoke test locale:
+
+```env
+FORECAST_CACHE_DIR=/Users/.../tesi_bioanalyst_repo_native/outputs/local_preview/previsioni_dev
+FORECAST_TARGET_MONTHS=2019-04,2019-05,2019-06
+```
+
+Esempio pubblicazione di un run storico già esistente:
+
+```powershell
+python scripts/publish_forecast_cache_from_existing_run.py --run-dir outputs/local_preview/model_forecast/Test2019/europe_native_small_all_2019_04_aligned_small_all_2019_03_native_one_step --month 2019-04
+python scripts/publish_forecast_cache_from_existing_run.py --run-dir outputs/local_preview/model_forecast/Test2019/europe_native_small_all_2019_05_aligned_small_all_2019_04_native_one_step --month 2019-05
+python scripts/publish_forecast_cache_from_existing_run.py --run-dir outputs/local_preview/model_forecast/Test2019/europe_native_small_all_2019_06_aligned_small_all_2019_05_native_one_step --month 2019-06
+```
+
+Con questo approccio validi:
+
+- toggle `Osservazione / Previsione`;
+- lettura cache forecast;
+- selezione area;
+- mappa forecast;
+- tabella mensile;
+- export CSV/Excel;
+- chart forecast.
+
+Non validi invece, finché non torni su Broan:
+
+- correttezza scientifica dei run 2026 reali;
+- disponibilità del BioCube reale spostato su SSD;
+- comandi CUDA per i nuovi rollout multi-step 2026.
+
 ## 1. Validare La Parte Osservativa Su `main`
 
 Prima di qualsiasi lavoro forecast, validare `main` sulla macchina universitaria Broan con dati reali BioCube.

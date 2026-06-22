@@ -45,9 +45,7 @@ from selected_area_indicators import (
 load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(PROJECT_ROOT / ".env.local", override=True)
 
-FORECAST_TARGET_MONTHS = ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09"]
-FORECAST_FIRST_MONTH = pd.Timestamp(f"{FORECAST_TARGET_MONTHS[0]}-01")
-FORECAST_LAST_MONTH = pd.Timestamp(f"{FORECAST_TARGET_MONTHS[-1]}-01")
+DEFAULT_FORECAST_TARGET_MONTHS = ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09"]
 FORECAST_VARIABLE_SPECS = {
     "temperature": {"workbook_prefix": "t2m", "output_column": "temperature_mean_c"},
     "ndvi": {"workbook_prefix": "NDVI", "output_column": "ndvi_mean"},
@@ -225,18 +223,39 @@ def get_forecast_cache_dir(*, strict: bool = True) -> Path | None:
     return path
 
 
+def normalize_month_label(value: str) -> str:
+    return pd.Timestamp(value).to_period("M").strftime("%Y-%m")
+
+
+def get_forecast_target_months() -> list[str]:
+    raw_value = os.getenv("FORECAST_TARGET_MONTHS", "").strip()
+    if not raw_value:
+        return DEFAULT_FORECAST_TARGET_MONTHS
+
+    tokens = [token.strip() for token in raw_value.replace(";", ",").split(",") if token.strip()]
+    if not tokens:
+        return DEFAULT_FORECAST_TARGET_MONTHS
+
+    months = sorted({normalize_month_label(token) for token in tokens})
+    if not months:
+        return DEFAULT_FORECAST_TARGET_MONTHS
+
+    return months
+
+
 def build_forecast_metadata() -> dict[str, Any]:
     cache_dir = get_forecast_cache_dir(strict=False)
+    target_months = get_forecast_target_months()
     available_months: list[str] = []
     if cache_dir is not None:
         available_months = [
             month
-            for month in FORECAST_TARGET_MONTHS
+            for month in target_months
             if (cache_dir / month / "cell_matrix").exists()
         ]
 
     return {
-        "targetMonths": FORECAST_TARGET_MONTHS,
+        "targetMonths": target_months,
         "availableMonths": available_months,
         "cacheConfigured": cache_dir is not None,
     }
@@ -447,18 +466,20 @@ def get_forecast_output_paths(label_slug: str) -> dict[str, Path]:
 
 
 def list_forecast_months_until_target(target_month: str) -> list[pd.Timestamp]:
+    target_months = get_forecast_target_months()
     month_ts = parse_month_start(target_month)
     month_label = month_ts.strftime("%Y-%m")
-    if month_label not in FORECAST_TARGET_MONTHS:
+    if month_label not in target_months:
         raise HTTPException(
             status_code=400,
             detail=(
-                "Il forecast supporta solo i mesi da 2026-04 a 2026-09. "
+                f"Il forecast supporta solo i mesi configurati: {', '.join(target_months)}. "
                 f"Hai richiesto {month_label}."
             ),
         )
 
-    return list(pd.period_range(start=FORECAST_FIRST_MONTH, end=month_ts, freq="M").to_timestamp())
+    first_month = pd.Timestamp(f"{target_months[0]}-01")
+    return list(pd.period_range(start=first_month, end=month_ts, freq="M").to_timestamp())
 
 
 def forecast_cell_matrix_path(month_ts: pd.Timestamp, workbook_prefix: str) -> Path:
