@@ -44,6 +44,7 @@ from bioanalyst_model_utils import (
     slugify,
     write_json,
 )
+from spatial_alignment import build_spatial_alignment_metadata
 
 
 @dataclass(slots=True)
@@ -411,6 +412,7 @@ def save_native_one_step_artifacts(
         "group_source_status": input_group_source_status,
         "input_group_source_status": input_group_source_status,
         "target_group_source_status": target_group_source_status,
+        "spatial_alignment": build_spatial_alignment_metadata(),
     }
     write_json(context.run_dir / "forecast_native_manifest.json", manifest)
     return {
@@ -460,6 +462,7 @@ def save_native_rollout_artifacts(
             use_atmospheric_data=bool(result.saved_windows.get("atmospheric_data_real", True)),
             input_mode=context.input_mode,
         ),
+        "spatial_alignment": build_spatial_alignment_metadata(),
     }
     write_json(context.run_dir / "forecast_native_manifest.json", manifest)
     return {
@@ -496,7 +499,10 @@ def load_native_manifest(run_dir: Path) -> dict[str, Any]:
     manifest_path = run_dir / "forecast_native_manifest.json"
     if not manifest_path.exists():
         raise SystemExit(f"Manifest non trovato: {manifest_path}")
-    return json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest.get("spatial_alignment"), dict):
+        manifest["spatial_alignment"] = build_spatial_alignment_metadata()
+    return manifest
 
 
 def load_native_batch_artifact(path: Path):
