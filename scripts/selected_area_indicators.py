@@ -16,6 +16,7 @@ Produce due livelli di output:
 from __future__ import annotations
 
 import argparse
+import calendar
 import math
 import os
 import re
@@ -78,6 +79,82 @@ def require_path(env_name: str) -> Path:
 def slugify(value: str) -> str:
     normalized = re.sub(r"[^a-zA-Z0-9]+", "_", value.strip().lower())
     return normalized.strip("_") or "selected_area"
+
+
+def days_in_month(month_ts: pd.Timestamp) -> int:
+    return calendar.monthrange(month_ts.year, month_ts.month)[1]
+
+
+def infer_precipitation_semantics(ds_prec: xr.Dataset) -> tuple[str, str]:
+    if "avg_tprate" in ds_prec.data_vars:
+        return (
+            "monthly_mean_precipitation_rate",
+            "Precipitazione calcolata da avg_tprate: kg m^-2 s^-1 -> mm/mese e mm/giorno",
+        )
+
+    attrs = ds_prec["tp"].attrs
+    units = str(attrs.get("units", "")).lower()
+    metadata_text = " ".join(
+        str(value).lower()
+        for value in [
+            attrs.get("long_name", ""),
+            attrs.get("standard_name", ""),
+            attrs.get("comment", ""),
+            ds_prec.attrs.get("title", ""),
+            ds_prec.attrs.get("history", ""),
+        ]
+    )
+
+    if any(marker in units for marker in ("day", "d-1", "d^-1")) or "per day" in metadata_text:
+        return (
+            "monthly_mean_daily_accumulation",
+            "tp interpretato come accumulo medio giornaliero: m/giorno -> mm/giorno e mm/mese",
+        )
+
+    return (
+        "monthly_total_accumulation",
+        "tp interpretato come accumulo mensile: m/mese -> mm/mese e mm/giorno",
+    )
+
+
+def convert_precipitation_to_mm(
+    tp_values: xr.DataArray,
+    month_ts: pd.Timestamp,
+    precipitation_semantics: str,
+) -> tuple[xr.DataArray, xr.DataArray]:
+    month_days = days_in_month(month_ts)
+    precipitation_mm = tp_values * 1000.0
+
+    if precipitation_semantics == "monthly_mean_daily_accumulation":
+        precipitation_daily_mm = precipitation_mm
+        precipitation_monthly_mm = precipitation_daily_mm * month_days
+    else:
+        precipitation_monthly_mm = precipitation_mm
+        precipitation_daily_mm = precipitation_monthly_mm / month_days
+
+    return precipitation_daily_mm, precipitation_monthly_mm
+
+
+def build_precipitation_layers(
+    ds_prec: xr.Dataset,
+    land_mask: xr.DataArray,
+    time_index: int,
+    month_ts: pd.Timestamp,
+    precipitation_semantics: str,
+) -> tuple[xr.DataArray, xr.DataArray]:
+    month_days = days_in_month(month_ts)
+
+    if precipitation_semantics == "monthly_mean_precipitation_rate" and "avg_tprate" in ds_prec.data_vars:
+        precipitation_rate = ds_prec["avg_tprate"].isel(valid_time=time_index).where(land_mask)
+        precipitation_daily_mm = precipitation_rate * 86400.0
+        precipitation_monthly_mm = precipitation_daily_mm * month_days
+        return precipitation_daily_mm, precipitation_monthly_mm
+
+    return convert_precipitation_to_mm(
+        tp_values=ds_prec["tp"].isel(valid_time=time_index).where(land_mask),
+        month_ts=month_ts,
+        precipitation_semantics=precipitation_semantics,
+    )
 
 
 # Definiamo gli argomenti CLI per selezionare area, periodo e formato di output.
@@ -288,19 +365,38 @@ def build_selected_cell_month_frame(
     land_mask: xr.DataArray,
     species_lookup: dict[str, pd.DataFrame],
     time_index: int,
+    precipitation_semantics: str,
 ) -> pd.DataFrame:
     month_ts = pd.to_datetime(ds_temp["valid_time"].values[time_index]).to_period("M").to_timestamp()
     month_key = str(month_ts.date())
+    precipitation_daily_mm, precipitation_monthly_mm = build_precipitation_layers(
+        ds_prec=ds_prec,
+        land_mask=land_mask,
+        time_index=time_index,
+        month_ts=month_ts,
+        precipitation_semantics=precipitation_semantics,
+    )
 
     month_ds = xr.Dataset(
         {
             "temperature_mean_c": ds_temp["t2m"].isel(valid_time=time_index).where(land_mask) - 273.15,
-            "precipitation_mean_mm": ds_prec["tp"].isel(valid_time=time_index).where(land_mask) * 1000.0,
+            "precipitation_mean_daily_mm": precipitation_daily_mm,
+            "precipitation_mean_mm": precipitation_monthly_mm,
+            "precipitation_monthly_total_mm": precipitation_monthly_mm,
         }
     )
     frame = month_ds.to_dataframe().reset_index()
     frame = frame.dropna(subset=["temperature_mean_c", "precipitation_mean_mm"], how="all")
-    frame = frame[["latitude", "longitude", "temperature_mean_c", "precipitation_mean_mm"]].copy()
+    frame = frame[
+        [
+            "latitude",
+            "longitude",
+            "temperature_mean_c",
+            "precipitation_mean_daily_mm",
+            "precipitation_mean_mm",
+            "precipitation_monthly_total_mm",
+        ]
+    ].copy()
     frame["latitude"] = frame["latitude"].round(2)
     frame["longitude"] = frame["longitude"].round(2)
     frame["month"] = month_ts
@@ -325,7 +421,9 @@ def build_selected_cell_month_frame(
             "latitude_weight",
             "species_count_observed_cell",
             "temperature_mean_c",
+            "precipitation_mean_daily_mm",
             "precipitation_mean_mm",
+            "precipitation_monthly_total_mm",
         ]
     ]
 
@@ -344,6 +442,12 @@ def compute_area_climate_monthly(cell_df: pd.DataFrame) -> pd.DataFrame:
                 ),
                 "precipitation_mean_area_mm": float(
                     (frame["precipitation_mean_mm"] * weights).sum() / weights.sum()
+                ),
+                "precipitation_mean_daily_area_mm": float(
+                    (frame["precipitation_mean_daily_mm"] * weights).sum() / weights.sum()
+                ),
+                "precipitation_monthly_total_area_mm": float(
+                    (frame["precipitation_monthly_total_mm"] * weights).sum() / weights.sum()
                 ),
                 "cell_count_land": int(len(frame)),
                 "cells_with_species_records": int(frame["species_count_observed_cell"].notna().sum()),
@@ -432,6 +536,7 @@ def main() -> None:
         end=args.end,
         max_steps=args.max_steps,
     )
+    precipitation_semantics, precipitation_note = infer_precipitation_semantics(ds_prec)
 
     try:
         cell_frames = []
@@ -443,6 +548,7 @@ def main() -> None:
                     land_mask=land_mask,
                     species_lookup=species_lookup,
                     time_index=idx,
+                    precipitation_semantics=precipitation_semantics,
                 )
             )
     finally:
@@ -482,6 +588,12 @@ def main() -> None:
         "species_semantics_area": "species_count_observed_area = numero di specie osservate nell'area selezionata per mese",
         "species_semantics_cells": "species_count_observed_cell = numero di specie osservate nella singola cella e mese",
         "species_note": "NaN sulle specie significa che nel dataset non risultano osservazioni per quella cella o area e in quel mese",
+        "precipitation_semantics": precipitation_semantics,
+        "precipitation_note": precipitation_note,
+        "precipitation_unit_note": (
+            "precipitation_mean_area_mm resta il valore mensile in mm per compatibilita; "
+            "precipitation_mean_daily_area_mm espone la media giornaliera in mm/giorno"
+        ),
         "temperature_source": str(source_paths["temperature"]),
         "precipitation_source": str(source_paths["precipitation"]),
         "species_source": str(source_paths["species"]),

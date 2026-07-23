@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import calendar
 import os
 from pathlib import Path
 
@@ -79,15 +80,30 @@ def show_precipitation_sample(precipitation_path: Path) -> None:
     ds = xr.open_dataset(precipitation_path)
     da = ds["tp"]
     first_time = pd.to_datetime(ds["valid_time"].values[0])
-    first_mean_mm = float(da.isel(valid_time=0).mean(skipna=True).load().item() * 1000.0)
+    first_days = calendar.monthrange(first_time.year, first_time.month)[1]
+    first_mean_raw = float(da.isel(valid_time=0).mean(skipna=True).load().item())
+    first_mean_mm = first_mean_raw * 1000.0
+    rate_da = ds["avg_tprate"] if "avg_tprate" in ds.data_vars else None
+    first_rate = (
+        float(rate_da.isel(valid_time=0).mean(skipna=True).load().item())
+        if rate_da is not None
+        else None
+    )
 
     print("=== PRECIPITATION ===")
     print(f"file: {precipitation_path}")
     print(f"data_vars: {list(ds.data_vars)}")
+    print(f"tp attrs: {dict(da.attrs)}")
     print(f"sizes: {dict(ds.sizes)}")
     print(f"prime date: {[str(pd.to_datetime(v).date()) for v in ds['valid_time'].values[:5]]}")
     print(f"prima data: {first_time}")
-    print(f"media europea del primo timestep (mm): {first_mean_mm:.4f}")
+    print(f"media europea del primo timestep tp raw (m): {first_mean_raw:.8f}")
+    print(f"media europea del primo timestep come mm/giorno: {first_mean_mm:.4f}")
+    print(f"media europea del primo timestep come mm/mese: {first_mean_mm * first_days:.4f}")
+    if first_rate is not None:
+        print(f"media europea avg_tprate raw (kg m-2 s-1): {first_rate:.10f}")
+        print(f"media europea da avg_tprate come mm/giorno: {first_rate * 86400.0:.4f}")
+        print(f"media europea da avg_tprate come mm/mese: {first_rate * 86400.0 * first_days:.4f}")
     print()
     ds.close()
 

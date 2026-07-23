@@ -29,11 +29,15 @@ export function createDemoResponse(input: {
   const monthly: IndicatorRow[] = months.map((month, index) => {
     const seasonal = Math.sin((index / 12) * Math.PI * 2 - Math.PI / 3);
     const rainSeasonal = Math.cos((index / 12) * Math.PI * 2);
+    const daysInMonth = new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate();
+    const precipitationMonthlyMm = 34 + rainSeasonal * 18 + Math.abs(lonCenter) * 0.25;
 
     return {
       month,
       temperature_mean_area_c: Number((12 + seasonal * 11 + (50 - latCenter) * 0.18).toFixed(2)),
-      precipitation_mean_area_mm: Number((48 + rainSeasonal * 22 + Math.abs(lonCenter) * 0.3).toFixed(2)),
+      precipitation_mean_area_mm: Number(precipitationMonthlyMm.toFixed(2)),
+      precipitation_mean_daily_area_mm: Number((precipitationMonthlyMm / daysInMonth).toFixed(2)),
+      precipitation_monthly_total_area_mm: Number(precipitationMonthlyMm.toFixed(2)),
       cell_count_land: Math.round(areaFactor),
       cells_with_species_records: Math.max(0, Math.round(areaFactor * 0.2 + seasonal * 3)),
       species_count_observed_area: Math.max(0, Math.round(areaFactor * 0.4 + seasonal * 4 + 3))

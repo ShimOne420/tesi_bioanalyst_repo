@@ -11,7 +11,8 @@ L'app permette di:
 - definire un periodo mensile
 - disegnare manualmente un rettangolo sulla mappa d'Europa
 - inviare la selezione a un backend
-- visualizzare in output i tre indicatori minimi per mese
+- visualizzare in output gli indicatori minimi per mese, con pioggia mensile e media giornaliera separate
+- esportare la tabella visualizzata in `CSV` o `Excel`
 - scaricare l'output mensile in `CSV`, `CSV per Excel` o `XLSX`
 
 ## Architettura
@@ -70,7 +71,7 @@ Quando backend e frontend sono entrambi aggiornati:
 
 - il selettore periodo usa automaticamente il range reale del dataset: `2000-01 -> 2020-12`
 - puoi scegliere qualunque intervallo mensile dentro quel range
-- dopo il calcolo compaiono tre pulsanti download:
+- dopo il calcolo compaiono i pulsanti di esportazione della tabella visibile e, quando il backend locale e attivo, tre download dei file prodotti:
   - `Scarica CSV`
   - `Scarica CSV per Excel`
   - `Scarica XLSX`

@@ -14,6 +14,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -53,8 +54,8 @@ def slugify(value: str) -> str:
 
 
 # Convertiamo una stringa numerica in float o `None` per costruire il JSON di risposta.
-def parse_float(value: str) -> float | None:
-    if value == "":
+def parse_float(value: str | None) -> float | None:
+    if value in (None, ""):
         return None
     return float(value)
 
@@ -184,12 +185,32 @@ def read_monthly_csv(path: Path) -> list[dict[str, Any]]:
                     "month": row["month"],
                     "temperature_mean_area_c": parse_float(row["temperature_mean_area_c"]),
                     "precipitation_mean_area_mm": parse_float(row["precipitation_mean_area_mm"]),
+                    "precipitation_mean_daily_area_mm": parse_float(
+                        row.get("precipitation_mean_daily_area_mm")
+                    ),
+                    "precipitation_monthly_total_area_mm": parse_float(
+                        row.get("precipitation_monthly_total_area_mm")
+                    ),
                     "cell_count_land": parse_int(row["cell_count_land"]),
                     "cells_with_species_records": parse_int(row["cells_with_species_records"]),
                     "species_count_observed_area": parse_int(row["species_count_observed_area"]),
                 }
             )
         return rows
+
+
+def resolve_python_executable() -> str:
+    candidates = [
+        PROJECT_ROOT / ".venv" / "Scripts" / "python.exe",
+        PROJECT_ROOT / ".venv-bioanalyst" / "Scripts" / "python.exe",
+        PROJECT_ROOT / ".venv" / "bin" / "python",
+        PROJECT_ROOT / ".venv-bioanalyst" / "bin" / "python",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    return sys.executable
 
 
 # Deriviamo i file di output generati per una certa label in modo coerente tra API e UI.
@@ -211,7 +232,7 @@ def build_indicator_command(body: dict[str, Any]) -> tuple[list[str], str]:
     label_slug = slugify(label_value)
 
     cmd = [
-        str(PROJECT_ROOT / ".venv" / "bin" / "python"),
+        resolve_python_executable(),
         str(PROJECT_ROOT / "scripts" / "selected_area_indicators.py"),
         "--start",
         str(body.get("start")),
@@ -289,6 +310,15 @@ def run_indicator_job(body: dict[str, Any]) -> dict[str, Any]:
 
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     monthly = read_monthly_csv(csv_path)
+    notes = [
+        note
+        for note in [
+            summary.get("species_note"),
+            summary.get("precipitation_note"),
+            summary.get("precipitation_unit_note"),
+        ]
+        if note
+    ]
 
     return {
         "status": "ok",
@@ -304,7 +334,7 @@ def run_indicator_job(body: dict[str, Any]) -> dict[str, Any]:
         "start": summary["start"],
         "end": summary["end"],
         "monthly": monthly,
-        "notes": [summary["species_note"]],
+        "notes": notes,
         "downloads": {
             "csvUrl": f"/api/download/{label_slug}/csv",
             "excelCsvUrl": f"/api/download/{label_slug}/excel_csv",
