@@ -1,39 +1,36 @@
-#!/usr/bin/env python3
-"""Test script to verify NDVI column matching fix."""
+from __future__ import annotations
+
 import sys
+import unittest
 from pathlib import Path
 
-# Add scripts directory to path
-sys.path.insert(0, str(Path(__file__).parent / "scripts"))
-
 import pandas as pd
-from bioanalyst_model_utils import find_monthly_column, to_month_start
-from datetime import datetime
 
-# Read just the header of the NDVI CSV
-csv_path = Path("../data/biocube/Land/Europe_ndvi_monthly_un_025.csv")
-if not csv_path.exists():
-    print(f"ERROR: NDVI CSV not found at {csv_path}")
-    sys.exit(1)
 
-columns = pd.read_csv(csv_path, nrows=0).columns.tolist()
-print(f"CSV columns (first 10): {columns[:10]}")
-print(f"Total columns: {len(columns)}")
+sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
 
-# Test finding June 2019 column
-month = pd.Timestamp("2019-06-01")
-print(f"\nTesting find_monthly_column for {month:%Y-%m}...")
-try:
-    result = find_monthly_column(columns, "NDVI", month)
-    print(f"SUCCESS: Found column '{result}'")
-except SystemExit as e:
-    print(f"FAILED: {e}")
-    # Try to find it manually
-    expected = "NDVI_06/2019"
-    if expected in columns:
-        print(f"MANUAL CHECK: Column '{expected}' exists in CSV!")
-    else:
-        print(f"MANUAL CHECK: Column '{expected}' NOT found in CSV")
-        # Search for similar columns
-        matches = [c for c in columns if "06" in c and "2019" in c]
-        print(f"Similar columns: {matches[:5]}")
+from bioanalyst_model_utils import find_monthly_column  # noqa: E402
+
+
+class NdviColumnMatchingTest(unittest.TestCase):
+    def test_matches_biocube_month_year_format(self) -> None:
+        columns = ["Country", "Latitude", "Longitude", "NDVI_06/2019"]
+
+        result = find_monthly_column(columns, "NDVI", pd.Timestamp("2019-06-01"))
+
+        self.assertEqual(result, "NDVI_06/2019")
+
+    def test_matching_is_case_insensitive(self) -> None:
+        columns = ["ndvi_2019-06"]
+
+        result = find_monthly_column(columns, "NDVI", pd.Timestamp("2019-06-01"))
+
+        self.assertEqual(result, "ndvi_2019-06")
+
+    def test_missing_month_raises_clear_error(self) -> None:
+        with self.assertRaisesRegex(KeyError, "2019-06"):
+            find_monthly_column(["NDVI_05/2019"], "NDVI", pd.Timestamp("2019-06-01"))
+
+
+if __name__ == "__main__":
+    unittest.main()

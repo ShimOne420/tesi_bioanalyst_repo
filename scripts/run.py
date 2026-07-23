@@ -1159,10 +1159,8 @@ def export_maps_and_matrix(
     outputs["prediction_png"] = str(prediction_png)
 
     observed_map = None
-    alignment_diagnostic_frame = None
     if observed_batch is not None:
         observed_map, _ = get_batch_variable_map(observed_batch, group_name=group, variable_name=variable)
-        alignment_diagnostic_frame = build_alignment_diagnostic_frame(predicted_map_raw, observed_map)
         observed_png = plots_dir / f"{variable}_observed.png"
         difference_png = plots_dir / f"{variable}_difference.png"
         plot_map(observed_png, observed_map, latitudes, longitudes, f"{group}.{variable} observed", unit, bounds)

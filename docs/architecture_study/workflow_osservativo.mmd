@@ -1,0 +1,68 @@
+flowchart LR
+    subgraph frontend ["Frontend Next.js"]
+        dash["biomap-dashboard.tsx"]
+        select["City map coordinates"]
+        nextApi["app/api/indicators"]
+        nextCells["app/api/cells label"]
+        mapView["indicator-map.tsx"]
+        chartView["trend-chart.tsx"]
+        tableView["Monthly table exports"]
+    end
+
+    subgraph backend ["Backend FastAPI"]
+        postIndicators["POST /api/indicators"]
+        buildCmd["build_indicator_command"]
+        runJob["run_indicator_job"]
+        getCells["GET /api/cells"]
+        readOutputs["read_monthly_csv"]
+        readCells["read_cells_parquet"]
+    end
+
+    subgraph scripts ["Python observed pipeline"]
+        selectedScript["selected_area_indicators.py"]
+        minUtils["minimum_indicator_utils.py"]
+        resolveSources["resolve_source_paths"]
+        loadClimate["load_climate_datasets"]
+        cellFrame["build_selected_cell_month_frame"]
+        areaAgg["compute_area_climate_monthly"]
+        writeOutputs["write_tabular_outputs"]
+    end
+
+    subgraph data ["Data and artifacts"]
+        biocube[("BioCube local datasets")]
+        areaFiles[("Area CSV XLSX summary")]
+        cellParquet[("Cells Parquet")]
+    end
+
+    dash -->|"Chooses area"| select
+    select -->|"POST body"| nextApi
+    nextApi -->|"Forwards request"| postIndicators
+    postIndicators -->|"Validates sources"| runJob
+    runJob -->|"Builds CLI"| buildCmd
+    buildCmd -->|"Executes script"| selectedScript
+    selectedScript -->|"Uses helpers"| minUtils
+    selectedScript -->|"Resolves paths"| resolveSources
+    resolveSources -->|"Reads files"| biocube
+    selectedScript -->|"Loads raster months"| loadClimate
+    loadClimate -->|"Reads layers"| biocube
+    selectedScript -->|"Builds cell month table"| cellFrame
+    cellFrame -->|"Aggregates area"| areaAgg
+    areaAgg -->|"Writes outputs"| writeOutputs
+    writeOutputs -->|"Area files"| areaFiles
+    writeOutputs -->|"Cell detail"| cellParquet
+    runJob -->|"Reads summary"| readOutputs
+    areaFiles -->|"Monthly JSON"| readOutputs
+    readOutputs -->|"IndicatorResponse"| dash
+    dash -->|"Needs map cells"| nextCells
+    nextCells -->|"Forwards month"| getCells
+    getCells -->|"Reads cells"| readCells
+    cellParquet -->|"Cell JSON"| readCells
+    readCells -->|"Thematic cells"| mapView
+    dash -->|"Selects variable"| mapView
+    dash -->|"Monthly rows"| chartView
+    dash -->|"Monthly rows"| tableView
+
+    style frontend fill:#C2E5FF,stroke:#3DADFF
+    style backend fill:#DCCCFF,stroke:#874FFF
+    style scripts fill:#CDF4D3,stroke:#66D575
+    style data fill:#FFECBD,stroke:#FFC943

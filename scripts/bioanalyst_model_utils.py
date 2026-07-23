@@ -28,7 +28,6 @@ import xarray as xr
 from dotenv import load_dotenv
 from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
-from omegaconf import OmegaConf
 
 try:
     import rasterio
@@ -837,7 +836,7 @@ def yearly_column_to_grid(
     total = len(grouped)
     print(f"  [debug] yearly_column_to_grid: {matched}/{total} coordinate match (saltate {skipped}) per {column_name}", flush=True)
     if matched == 0 and total > 0:
-        print(f"  [warn] Nessuna coordinata CSV allineata alla griglia del modello!", flush=True)
+        print("  [warn] Nessuna coordinata CSV allineata alla griglia del modello!", flush=True)
         print(f"  [debug] Esempio lat_key: {round(float(grouped.iloc[0]['Latitude']), 2) if total > 0 else 'N/A'}", flush=True)
         print(f"  [debug] Esempio lon_key: {round(float(grouped.iloc[0]['Longitude']), 2) if total > 0 else 'N/A'}", flush=True)
         print(f"  [debug] Primo lat_index: {list(lat_index.keys())[0] if lat_index else 'vuoto'}", flush=True)
@@ -1478,7 +1477,7 @@ def build_vegetation_group_from_sources(
             f"Dettagli: {' | '.join(real_ndvi_errors)}"
         )
 
-    print(f"  [debug] Uso fallback LAI da NetCDF", flush=True)
+    print("  [debug] Uso fallback LAI da NetCDF", flush=True)
     try:
         return build_vegetation_group(
             require_source_path(source_paths, "land_vegetation_dynamic"),
@@ -1821,8 +1820,8 @@ def build_local_config(batch_dir: Path, checkpoint_path: Path, device_name: str)
         f"data.test_data_path='{batch_dir}'",
         f"data.scaling.stats_path='{MODEL_BATCH_STATS_PATH}'",
         f"data.land_mask_path='{MODEL_LAND_MASK_PATH}'",
-        f"training.workers=0",
-        f"evaluation.batch_size=1",
+        "training.workers=0",
+        "evaluation.batch_size=1",
         f"evaluation.checkpoint_path='{checkpoint_path}'",
         "training.devices=[1]",
         "training.accelerator=cpu",

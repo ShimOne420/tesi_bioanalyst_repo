@@ -35,7 +35,7 @@ SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from selected_area_indicators import (
+from selected_area_indicators import (  # noqa: E402
     infer_spatial_table_month_range,
     resolve_ndvi_source_path,
     resolve_vegetation_dynamic_source_path,

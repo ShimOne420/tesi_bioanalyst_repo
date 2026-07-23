@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BioMap - Dashboard tecnica osservativa</title>
+  <style>
+    :root {
+      --ink: #18201c;
+      --muted: #5b675f;
+      --line: #d8ded6;
+      --paper: #f7f8f4;
+      --panel: #ffffff;
+      --blue: #dcecff;
+      --green: #ddf4df;
+      --yellow: #fff0c8;
+      --violet: #eadfff;
+      --red: #ffe0d8;
+      --teal: #d8f5ef;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+      line-height: 1.5;
+    }
+
+    main {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: 1.4fr 0.8fr;
+      gap: 18px;
+      align-items: stretch;
+      margin-bottom: 18px;
+    }
+
+    .hero, .panel, .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 1px 2px rgba(24, 32, 28, 0.04);
+    }
+
+    .hero { padding: 24px; }
+    .panel { padding: 18px; margin-top: 18px; }
+    .card { padding: 16px; }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #416151;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin-bottom: 12px; font-size: clamp(30px, 4vw, 48px); line-height: 1.02; letter-spacing: 0; }
+    h2 { margin-bottom: 12px; font-size: 22px; }
+    h3 { margin-bottom: 8px; font-size: 16px; }
+    p { color: var(--muted); }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: #eef1ec;
+      color: #26322c;
+      font-size: 0.92em;
+    }
+
+    .status-list {
+      display: grid;
+      gap: 10px;
+      height: 100%;
+    }
+
+    .status-list .card {
+      display: grid;
+      gap: 4px;
+    }
+
+    .metric {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+
+    .metric .card strong {
+      display: block;
+      font-size: 24px;
+      line-height: 1.1;
+    }
+
+    .metric .card span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      align-items: start;
+    }
+
+    .lane {
+      display: grid;
+      gap: 10px;
+      min-height: 100%;
+    }
+
+    .lane h3 {
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #f4f6f2;
+    }
+
+    .node {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      min-height: 72px;
+    }
+
+    .node strong { display: block; margin-bottom: 4px; }
+    .node small { color: var(--muted); }
+    .blue { background: var(--blue); }
+    .green { background: var(--green); }
+    .yellow { background: var(--yellow); }
+    .violet { background: var(--violet); }
+    .teal { background: var(--teal); }
+
+    .connector {
+      height: 20px;
+      border-left: 2px solid #9aa69d;
+      margin-left: 16px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 14px;
+    }
+
+    th { background: #eef3ed; font-size: 13px; }
+    tr:last-child td { border-bottom: 0; }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .checklist {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+
+    .pill {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--muted);
+    }
+
+    @media (max-width: 900px) {
+      header, .metric, .flow, .two-col, .checklist {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <section class="hero">
+        <p class="eyebrow">Pipeline osservativa</p>
+        <h1>BioCube -> Python -> FastAPI -> Next.js</h1>
+        <p>
+          Cruscotto tecnico per ripassare la catena osservativa BioMap: selezione area,
+          lettura dati reali, calcolo cella-mese, aggregazione area-mese e rendering dashboard.
+        </p>
+        <p>
+          Sorgente principale: <code>TCBiomap/tesi_bioanalyst_repo_native</code>.
+          Report completo: <code>REPORT_PIPELINE_OSSERVATIVA.md</code>.
+        </p>
+      </section>
+
+      <aside class="status-list">
+        <div class="card green">
+          <strong>Modalita</strong>
+          <span>Observed only, nessun forecast nella vista principale.</span>
+        </div>
+        <div class="card yellow">
+          <strong>Output</strong>
+          <span>CSV, CSV Excel-friendly, XLSX, summary JSON, Parquet celle.</span>
+        </div>
+        <div class="card blue">
+          <strong>UI</strong>
+          <span>Mappa, trend, tabella mensile, export tabella visibile.</span>
+        </div>
+      </aside>
+    </header>
+
+    <section class="metric">
+      <div class="card">
+        <strong>9</strong>
+        <span>Variabili area/cella principali in dashboard.</span>
+      </div>
+      <div class="card">
+        <strong>6</strong>
+        <span>Endpoint FastAPI/Next coinvolti nella vista osservativa.</span>
+      </div>
+      <div class="card">
+        <strong>1</strong>
+        <span>Script osservativo orchestratore: <code>selected_area_indicators.py</code>.</span>
+      </div>
+      <div class="card">
+        <strong>0</strong>
+        <span>Fallback demo: senza backend reale la UI mostra errore.</span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Workflow operativo</h2>
+      <div class="flow">
+        <div class="lane">
+          <h3>Frontend</h3>
+          <div class="node blue"><strong>biomap-dashboard.tsx</strong><small>Area, periodo, modalita osservazione, variabile selezionata.</small></div>
+          <div class="connector"></div>
+          <div class="node blue"><strong>app/api/indicators</strong><small>Proxy Next.js verso FastAPI.</small></div>
+          <div class="connector"></div>
+          <div class="node blue"><strong>indicator-map / trend-chart</strong><small>Render cella-mese e area-mese.</small></div>
+        </div>
+        <div class="lane">
+          <h3>Backend</h3>
+          <div class="node violet"><strong>POST /api/indicators</strong><small>Valida body e sorgenti BioCube.</small></div>
+          <div class="connector"></div>
+          <div class="node violet"><strong>build_indicator_command</strong><small>Costruisce CLI con area, periodo e output mode.</small></div>
+          <div class="connector"></div>
+          <div class="node violet"><strong>run_indicator_job</strong><small>Esegue subprocess e rilegge output.</small></div>
+        </div>
+        <div class="lane">
+          <h3>Script Python</h3>
+          <div class="node green"><strong>selected_area_indicators.py</strong><small>Orchestratore osservativo end-to-end.</small></div>
+          <div class="connector"></div>
+          <div class="node green"><strong>build_selected_cell_month_frame</strong><small>Tabella per cella, mese e variabili osservate.</small></div>
+          <div class="connector"></div>
+          <div class="node green"><strong>compute_area_climate_monthly</strong><small>Aggregazione pesata area-mese.</small></div>
+        </div>
+        <div class="lane">
+          <h3>Dati e output</h3>
+          <div class="node yellow"><strong>BioCube</strong><small>ERA5, NDVI, soil, agriculture, forest, species.</small></div>
+          <div class="connector"></div>
+          <div class="node yellow"><strong>outputs/local_preview</strong><small>CSV, XLSX, JSON, Parquet.</small></div>
+          <div class="connector"></div>
+          <div class="node yellow"><strong>IndicatorResponse</strong><small>JSON consumato dalla dashboard.</small></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Funzioni da sapere bene</h2>
+      <table>
+        <thead>
+          <tr><th>File</th><th>Funzione</th><th>Perche conta</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>backend_api/main.py</code></td><td><code>build_indicator_command</code></td><td>Trasforma richiesta UI in comando Python ripetibile.</td></tr>
+          <tr><td><code>backend_api/main.py</code></td><td><code>run_indicator_job</code></td><td>Ponte reale tra backend FastAPI e script osservativo.</td></tr>
+          <tr><td><code>selected_area_indicators.py</code></td><td><code>resolve_source_paths</code></td><td>Definisce quali file BioCube entrano nel calcolo.</td></tr>
+          <tr><td><code>selected_area_indicators.py</code></td><td><code>build_selected_cell_month_frame</code></td><td>Costruisce la matrice cella-mese usata dalla mappa.</td></tr>
+          <tr><td><code>selected_area_indicators.py</code></td><td><code>compute_area_climate_monthly</code></td><td>Produce la tabella mensile area-level.</td></tr>
+          <tr><td><code>minimum_indicator_utils.py</code></td><td><code>write_tabular_outputs</code></td><td>Scrive gli artefatti consumati dal backend.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel two-col">
+      <div>
+        <h2>Schema dati UI</h2>
+        <table>
+          <thead><tr><th>Campo</th><th>Uso</th></tr></thead>
+          <tbody>
+            <tr><td><code>monthly</code></td><td>Righe area-mese per tabella e trend.</td></tr>
+            <tr><td><code>cellsUrl</code></td><td>Endpoint celle per mappa tematica.</td></tr>
+            <tr><td><code>downloads</code></td><td>CSV, CSV Excel-friendly, XLSX prodotti dal backend.</td></tr>
+            <tr><td><code>notes</code></td><td>Semantica specie e schema osservativo.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <h2>Variabili dashboard</h2>
+        <table>
+          <thead><tr><th>Gruppo</th><th>Variabili</th></tr></thead>
+          <tbody>
+            <tr><td>Clima</td><td>Temperature, precipitation</td></tr>
+            <tr><td>Suolo</td><td>SWVL1, SWVL2, STL1, STL2</td></tr>
+            <tr><td>Vegetazione</td><td>NDVI</td></tr>
+            <tr><td>Land cover</td><td>Cropland, Arable, Forest</td></tr>
+            <tr><td>Specie</td><td>Observed species counts, con semantica cauta.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Checklist di ripasso</h2>
+      <div class="checklist">
+        <div class="pill">La UI osservativa chiama <code>/api/indicators</code>.</div>
+        <div class="pill">FastAPI lancia <code>selected_area_indicators.py</code>.</div>
+        <div class="pill">La mappa non usa il CSV mensile, usa il Parquet celle.</div>
+        <div class="pill">Le medie area sono pesate con peso latitudinale.</div>
+        <div class="pill">Le specie vuote indicano mancanza di osservazioni nel dataset.</div>
+        <div class="pill">Nessuna metrica forecast entra nella vista osservativa.</div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

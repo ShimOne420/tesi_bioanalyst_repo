@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BioMap - Dashboard tecnica previsionale</title>
+  <style>
+    :root {
+      --ink: #181d23;
+      --muted: #5e6670;
+      --line: #d7dde4;
+      --paper: #f6f7f4;
+      --panel: #ffffff;
+      --blue: #dcecff;
+      --green: #ddf4df;
+      --yellow: #fff0c8;
+      --violet: #eadfff;
+      --red: #ffe0d8;
+      --teal: #d8f5ef;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+      line-height: 1.5;
+    }
+
+    main {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+
+    .hero, .panel, .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 1px 2px rgba(24, 29, 35, 0.04);
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: 1.3fr 0.9fr;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .hero { padding: 24px; }
+    .panel { padding: 18px; margin-top: 18px; }
+    .card { padding: 16px; }
+
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin-bottom: 12px; font-size: clamp(30px, 4vw, 48px); line-height: 1.02; letter-spacing: 0; }
+    h2 { margin-bottom: 12px; font-size: 22px; }
+    h3 { margin-bottom: 8px; font-size: 16px; }
+    p { color: var(--muted); }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #4f4a73;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: #eef1ec;
+      color: #26322c;
+      font-size: 0.92em;
+    }
+
+    .metric {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+
+    .metric .card strong {
+      display: block;
+      font-size: 24px;
+      line-height: 1.1;
+    }
+
+    .metric .card span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .split-flow {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .flow-column {
+      display: grid;
+      gap: 10px;
+    }
+
+    .node {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      min-height: 72px;
+    }
+
+    .node strong { display: block; margin-bottom: 4px; }
+    .node small { color: var(--muted); }
+    .blue { background: var(--blue); }
+    .green { background: var(--green); }
+    .yellow { background: var(--yellow); }
+    .violet { background: var(--violet); }
+    .red { background: var(--red); }
+    .teal { background: var(--teal); }
+
+    .connector {
+      height: 18px;
+      border-left: 2px solid #9aa3ad;
+      margin-left: 16px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 14px;
+    }
+
+    th { background: #eef3ed; font-size: 13px; }
+    tr:last-child td { border-bottom: 0; }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .timeline {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 10px;
+    }
+
+    .month {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .month strong { display: block; }
+    .month span { color: var(--muted); font-size: 13px; }
+
+    .checklist {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+
+    .pill {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--muted);
+    }
+
+    @media (max-width: 900px) {
+      header, .metric, .split-flow, .two-col, .timeline, .checklist {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <section class="hero">
+        <p class="eyebrow">Pipeline previsionale</p>
+        <h1>Run offline BioAnalyst -> cache forecast -> dashboard</h1>
+        <p>
+          Cruscotto tecnico per ripassare il forecast BioMap: batch nativi, modello BioAnalyst,
+          rollout, export cell_matrix, backend cache e UI in modalita previsione.
+        </p>
+        <p>
+          Report completo: <code>REPORT_PIPELINE_PREVISIONALE.md</code>.
+          Workflow sorgente: <code>workflow_previsionale.mmd</code>.
+        </p>
+      </section>
+
+      <aside class="flow-column">
+        <div class="card green">
+          <strong>Offline</strong>
+          <span>Il modello gira via script, non dal browser.</span>
+        </div>
+        <div class="card yellow">
+          <strong>Cache</strong>
+          <span>La UI legge <code>previsioni/YYYY-MM/cell_matrix</code>.</span>
+        </div>
+        <div class="card violet">
+          <strong>Forecast UI</strong>
+          <span>Proiezione futura, non backtest con metriche errore.</span>
+        </div>
+      </aside>
+    </header>
+
+    <section class="metric">
+      <div class="card">
+        <strong>2</strong>
+        <span>Runner operativi: <code>run.py</code> e <code>run_rollout.py</code>.</span>
+      </div>
+      <div class="card">
+        <strong>9</strong>
+        <span>Variabili lette dal cache forecast in dashboard.</span>
+      </div>
+      <div class="card">
+        <strong>6</strong>
+        <span>Mesi target default: aprile-settembre 2026.</span>
+      </div>
+      <div class="card">
+        <strong>0</strong>
+        <span>Run live dal frontend.</span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Workflow operativo diviso in due meta</h2>
+      <div class="split-flow">
+        <div class="flow-column">
+          <h3>Produzione offline</h3>
+          <div class="node green"><strong>run.py / run_rollout.py</strong><small>Entry point operativo per one-step e rollout.</small></div>
+          <div class="connector"></div>
+          <div class="node green"><strong>bioanalyst_model_utils.py</strong><small>Costruisce batch `.pt` da BioCube e config modello.</small></div>
+          <div class="connector"></div>
+          <div class="node green"><strong>bioanalyst_native_utils.py</strong><small>Carica runtime BioAnalyst ed esegue one-step o rollout.</small></div>
+          <div class="connector"></div>
+          <div class="node yellow"><strong>native pt + manifest</strong><small>Output nativo ispezionabile e validabile.</small></div>
+          <div class="connector"></div>
+          <div class="node yellow"><strong>previsioni/YYYY-MM/cell_matrix</strong><small>Workbook full_grid pubblicati per il backend.</small></div>
+        </div>
+        <div class="flow-column">
+          <h3>Lettura online</h3>
+          <div class="node blue"><strong>biomap-dashboard.tsx</strong><small>Toggle Previsione e mese target.</small></div>
+          <div class="connector"></div>
+          <div class="node blue"><strong>app/api/forecast</strong><small>Proxy Next.js verso FastAPI.</small></div>
+          <div class="connector"></div>
+          <div class="node violet"><strong>POST /api/forecast</strong><small>Legge cache, ritaglia bounding box, aggrega mesi.</small></div>
+          <div class="connector"></div>
+          <div class="node violet"><strong>forecast cells Parquet</strong><small>Celle forecast per la mappa tematica.</small></div>
+          <div class="connector"></div>
+          <div class="node blue"><strong>Mappa, trend, tabella</strong><small>Rendering forecast senza riesecuzione modello.</small></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Sequenza rollout</h2>
+      <div class="timeline">
+        <div class="month teal"><strong>Input</strong><span>Feb + Mar observed</span></div>
+        <div class="month green"><strong>2026-04</strong><span>One-step</span></div>
+        <div class="month yellow"><strong>2026-05</strong><span>Rollout step 2</span></div>
+        <div class="month yellow"><strong>2026-06</strong><span>Rollout step 3</span></div>
+        <div class="month red"><strong>2026-07</strong><span>Errore piu probabile</span></div>
+        <div class="month red"><strong>2026-09</strong><span>Orizzonte da trattare con cautela</span></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Funzioni da sapere bene</h2>
+      <table>
+        <thead>
+          <tr><th>File</th><th>Funzione</th><th>Perche conta</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>bioanalyst_model_utils.py</code></td><td><code>build_raw_batch_for_months</code></td><td>Trasforma BioCube in batch nativo del modello.</td></tr>
+          <tr><td><code>bioanalyst_model_utils.py</code></td><td><code>save_window_batches</code></td><td>Scrive finestre input e target osservato.</td></tr>
+          <tr><td><code>bioanalyst_native_utils.py</code></td><td><code>build_native_runtime</code></td><td>Carica dataset ufficiale, modello e checkpoint.</td></tr>
+          <tr><td><code>bioanalyst_native_utils.py</code></td><td><code>run_native_one_step</code></td><td>Produce il mese successivo.</td></tr>
+          <tr><td><code>bioanalyst_native_utils.py</code></td><td><code>run_native_rollout</code></td><td>Produce sequenza autoregressiva multi-step.</td></tr>
+          <tr><td><code>backend_api/main.py</code></td><td><code>load_forecast_variable_layer</code></td><td>Legge i workbook forecast per singola variabile.</td></tr>
+          <tr><td><code>backend_api/main.py</code></td><td><code>run_forecast_cache_job</code></td><td>Costruisce la risposta forecast finale per la UI.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel two-col">
+      <div>
+        <h2>Cache letta dal backend</h2>
+        <table>
+          <thead><tr><th>Elemento</th><th>Uso</th></tr></thead>
+          <tbody>
+            <tr><td><code>FORECAST_CACHE_DIR</code></td><td>Root della cache previsionale.</td></tr>
+            <tr><td><code>FORECAST_TARGET_MONTHS</code></td><td>Mesi target consentiti in UI.</td></tr>
+            <tr><td><code>full_grid</code></td><td>Foglio Excel cella-per-cella.</td></tr>
+            <tr><td><code>predicted_*</code></td><td>Colonna predetta cercata automaticamente.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <h2>Variabili forecast UI</h2>
+        <table>
+          <thead><tr><th>Key UI</th><th>Workbook</th></tr></thead>
+          <tbody>
+            <tr><td><code>temperature</code></td><td><code>t2m_cell_matrix.xlsx</code></td></tr>
+            <tr><td><code>ndvi</code></td><td><code>NDVI_cell_matrix.xlsx</code></td></tr>
+            <tr><td><code>swvl1</code>, <code>swvl2</code></td><td>Soil moisture workbooks.</td></tr>
+            <tr><td><code>stl1</code>, <code>stl2</code></td><td>Soil temperature workbooks.</td></tr>
+            <tr><td><code>cropland</code>, <code>arable</code>, <code>forest</code></td><td>Land cover context workbooks.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Checklist di ripasso</h2>
+      <div class="checklist">
+        <div class="pill">La dashboard forecast non lancia BioAnalyst.</div>
+        <div class="pill">Il primo mese e one-step; i successivi sono rollout.</div>
+        <div class="pill">Il backend legge workbook, non file `.pt`.</div>
+        <div class="pill">La temperatura va normalizzata se arriva in Kelvin.</div>
+        <div class="pill">Le metriche errore restano fuori dalla UI forecast.</div>
+        <div class="pill">NDVI e rollout lungo vanno interpretati con cautela.</div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,74 @@
+flowchart LR
+    subgraph offline ["Offline model run"]
+        runOne["run.py one-step"]
+        runRollout["run_rollout.py"]
+        publishExisting["publish_forecast_cache_from_existing_run.py"]
+        nativeUtils["bioanalyst_native_utils.py"]
+        modelUtils["bioanalyst_model_utils.py"]
+        modelRun["run_native_one_step or rollout"]
+        exportWorkbooks["export_reliable_feature_workbooks"]
+    end
+
+    subgraph sources ["Model sources"]
+        biocube[("BioCube datasets")]
+        checkpoint[("BioAnalyst checkpoint")]
+        nativeArtifacts[("Native pt manifest")]
+        forecastCache[("previsioni month cell_matrix")]
+    end
+
+    subgraph backend ["Backend FastAPI forecast"]
+        postForecast["POST /api/forecast"]
+        resolveBounds["resolve_selection_bounds"]
+        targetMonths["list_forecast_months_until_target"]
+        loadLayer["load_forecast_variable_layer"]
+        buildMonthCells["build_forecast_month_cell_frame"]
+        computeMonthly["compute_forecast_monthly"]
+        forecastParquet[("forecast cells Parquet")]
+        forecastCells["GET /api/forecast/cells"]
+    end
+
+    subgraph frontend ["Frontend Next.js"]
+        dash["biomap-dashboard.tsx"]
+        modeToggle["Osservazione Previsione"]
+        nextForecast["app/api/forecast"]
+        nextForecastCells["app/api/forecast/cells label"]
+        mapView["indicator-map.tsx"]
+        chartView["trend-chart.tsx"]
+        tableView["Forecast table export"]
+    end
+
+    runOne -->|"Prepares context"| nativeUtils
+    runRollout -->|"Prepares context"| nativeUtils
+    nativeUtils -->|"Builds batches"| modelUtils
+    modelUtils -->|"Reads inputs"| biocube
+    nativeUtils -->|"Loads model"| checkpoint
+    nativeUtils -->|"Executes model"| modelRun
+    modelRun -->|"Saves outputs"| nativeArtifacts
+    nativeArtifacts -->|"Exports cell grids"| exportWorkbooks
+    runRollout -->|"Publishes months"| exportWorkbooks
+    publishExisting -->|"Republishes old run"| exportWorkbooks
+    exportWorkbooks -->|"Writes workbooks"| forecastCache
+
+    dash -->|"Switches mode"| modeToggle
+    modeToggle -->|"Target month"| nextForecast
+    nextForecast -->|"Forwards request"| postForecast
+    postForecast -->|"Area selection"| resolveBounds
+    postForecast -->|"Month sequence"| targetMonths
+    targetMonths -->|"For each month"| buildMonthCells
+    buildMonthCells -->|"Loads variables"| loadLayer
+    forecastCache -->|"full_grid sheets"| loadLayer
+    loadLayer -->|"Merged cells"| buildMonthCells
+    buildMonthCells -->|"Weighted area rows"| computeMonthly
+    buildMonthCells -->|"Stores cells"| forecastParquet
+    computeMonthly -->|"IndicatorResponse"| dash
+    dash -->|"Needs cells"| nextForecastCells
+    nextForecastCells -->|"Forwards month"| forecastCells
+    forecastParquet -->|"Cell JSON"| forecastCells
+    forecastCells -->|"Thematic cells"| mapView
+    dash -->|"Forecast rows"| chartView
+    dash -->|"Forecast rows"| tableView
+
+    style offline fill:#CDF4D3,stroke:#66D575
+    style sources fill:#FFECBD,stroke:#FFC943
+    style backend fill:#DCCCFF,stroke:#874FFF
+    style frontend fill:#C2E5FF,stroke:#3DADFF

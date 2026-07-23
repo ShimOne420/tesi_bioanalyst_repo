@@ -1,55 +1,48 @@
-# Collaborazione GitHub
+# Contributing
 
-Questo progetto e pensato per essere usato da piu persone.
+BioMAP is a research repository. Changes should remain reproducible, reviewable, and explicit about their scientific assumptions.
 
-## Regole base
+## Before making changes
 
-- il codice va versionato con `git`
-- il repository va pubblicato su `GitHub`
-- ogni collaboratore deve poter fare:
-  - `pull`
-  - `commit`
-  - `push`
+1. Create a focused branch from the current default branch.
+2. Install `requirements-dev.txt` and the locked frontend dependencies.
+3. Configure local paths through `.env`; never hardcode machine-specific paths.
+4. Check the relevant source coverage before changing indicator or forecast semantics.
 
-## Cosa va su GitHub
+## Code guidelines
 
-- codice Python
-- notebook
-- README
-- documentazione
-- file di configurazione
-- piccoli output utili
+- Prefer small functions with descriptive names over inline procedural blocks.
+- Keep data units and conversion rules visible in code and metadata.
+- Distinguish observed values, predictions, proxies, and placeholders.
+- Add a regression test when fixing a calculation or data-mapping bug.
+- Avoid debug-only scripts when the same behavior can be expressed as a test.
+- Do not commit generated outputs, datasets, checkpoints, caches, or virtual environments.
 
-## Cosa non va su GitHub
+## Validation
 
-- dataset pesanti
-- pesi del modello
-- `.venv`
-- output grandi o temporanei
+Run the checks relevant to your change:
 
-## Flusso consigliato
+```bash
+ruff check backend_api scripts test_*.py
+python -m compileall -q backend_api scripts
+pytest
+```
 
-1. `git pull`
-2. creare o aggiornare il proprio branch
-3. fare modifiche piccole e chiare
-4. fare `commit`
-5. fare `push`
-6. aprire `pull request` oppure integrare nel branch condiviso, a seconda della scelta del team
+```bash
+cd web-ui
+npm run check
+```
 
-## Struttura minima del lavoro condiviso
+Model-dependent checks must run in the BioAnalyst environment with the documented checkpoint and input mode. Include those details in the pull request.
 
-- il repository GitHub contiene il progetto
-- ciascuno ha il proprio dataset in locale o su storage dedicato
-- i percorsi locali dei dati vengono gestiti con `.env`
+## Pull requests
 
-## Regola importante
+Explain:
 
-Gli script devono funzionare anche se il dataset si trova in percorsi diversi su computer diversi.
+- what changed and why;
+- which workflow is affected;
+- any change to units, data sources, assumptions, or output schemas;
+- the commands used for validation;
+- known limitations or follow-up work.
 
-Per questo:
-
-- mai scrivere path assoluti hardcoded dentro il codice
-- usare variabili tipo:
-  - `BIOCUBE_DIR`
-  - `BIOANALYST_MODEL_DIR`
-  - `PROJECT_OUTPUT_DIR`
+Keep unrelated local work out of the commit.

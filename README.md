@@ -1,169 +1,314 @@
-# Tesi BioAnalyst
+# BioMAP — Ecosystem Assessment and Forecasting with BioAnalyst
 
-Questo ramo `forecast-bioanalyst-native` serve a replicare BioAnalyst nel modo piu fedele possibile a repository, documentazione e paper.
+BioMAP is a thesis research project for ecosystem assessment with geospatial foundation models. It combines observed biodiversity and climate indicators with a native-first integration of the BioAnalyst forecasting model, then exposes the results through a FastAPI service and a Next.js dashboard.
 
-## Obiettivo Del Ramo
+The repository is designed for reproducible local research. Source code, configuration examples, tests, and documentation are versioned; large datasets, model weights, generated forecasts, and machine-specific settings remain outside Git.
 
-In questo ramo non stiamo ancora costruendo output BIOMAP come deliverable principale.
+## Project status
 
-L'obiettivo attuale e solo questo:
+The project currently supports two related workflows:
 
-- preparare batch compatibili con `bfm-model`
-- eseguire il modello ufficiale con `T=2`
-- ottenere output nativi one-step e rollout
-- salvare batch predetti, target osservati e metadata del run
+1. **Observed assessment** — computes area-level and cell-level indicators from BioCube data for a selected European city, bounding box, and monthly period.
+2. **Forecast experimentation** — prepares native BioAnalyst batches, runs one-step or multi-step inference, validates predictions, and converts selected outputs into BioMAP-ready tables and forecast caches.
 
-Observed pipeline, backend e UI restano disponibili nel repository, ma non sono il focus del lavoro su questo ramo.
+The observed pipeline is operational. The forecast pipeline is technically integrated, but its outputs remain research results and must not be interpreted as validated ecological predictions without the documented evaluation steps.
 
-## Allineamento Con BioAnalyst
+## Core capabilities
 
-I punti fermi presi da repository e documentazione ufficiale sono:
+- Select a European city or draw a custom area.
+- Query monthly observed indicators at area and grid-cell level.
+- Process temperature, precipitation, species, NDVI, soil, land, agriculture, and forest variables when their sources are available.
+- Build BioAnalyst-compatible batches with explicit real, proxy, and placeholder inputs.
+- Run native one-step and autoregressive multi-step forecasts.
+- Export maps, CSV files, Parquet files, JSON manifests, and Excel workbooks.
+- Serve observed and forecast data through FastAPI.
+- Explore the results in an interactive Next.js dashboard.
 
-- forecast mensile con `2` timestep in input
-- example notebook pensato per `one timestep ahead prediction`
-- architettura `encoder -> backbone -> decoder`
-- runner ufficiale costruito attorno a `LargeClimateDataset` e `setup_bfm_model`
+## Architecture
 
-Quindi, nel ramo native:
+```text
+BioCube and local model assets
+          |
+          v
+Python processing and validation scripts
+          |
+          +---- observed indicators ----> CSV / Parquet / XLSX
+          |
+          +---- BioAnalyst inference ----> native tensors / manifests
+                                          |
+                                          v
+                                  BioMAP conversion and cache
+          |
+          v
+FastAPI backend <----> Next.js dashboard
+```
 
-- niente forecast area-level BIOMAP come criterio di riuscita
-- niente validazione finale del progetto nello spazio BIOMAP
-- niente adapter custom come passaggio iniziale
+The main directories are:
 
-prima chiudiamo il comportamento nativo del modello.
+| Path | Purpose |
+| --- | --- |
+| `backend_api/` | FastAPI application and API endpoints. |
+| `scripts/` | Data preparation, observed indicators, model inference, validation, export, and utility commands. |
+| `web-ui/` | Next.js dashboard for area selection and result exploration. |
+| `data/` | Small versioned catalogs and validation case definitions. Large BioCube data is ignored. |
+| `models/` | Model documentation. Checkpoints are ignored. |
+| `notebooks/` | Exploratory and reproducibility notebooks. |
+| `docs/` | Operational guides, methodology notes, validation reports, and architecture studies. |
+| `outputs/` | Generated local results. The directory is ignored by Git. |
+| `external/` | Placeholder for external source repositories such as `bfm-model`; contents are ignored. |
 
-## Copertura Dati Reale Del Batch
+## Requirements
 
-Nel ramo native, oggi i gruppi che usano dati reali sono:
+- Python 3.11 or 3.12 is recommended.
+- Node.js 18 or newer is required for the dashboard.
+- Git is required to retrieve the external BioAnalyst implementation.
+- A CUDA-capable environment is recommended for full model inference.
 
-- `surface`
-- `edaphic`
-- `atmospheric`
-- `climate`
-- `species`
-- `land`, ricostruito dal canale reale `lsm`
+The base Python dependencies are listed in `requirements.txt`. Development checks are declared in `requirements-dev.txt`. BioAnalyst itself may require additional PyTorch and CUDA versions dictated by the external `bfm-model` repository and the target machine.
 
-Nel BioCube locale e presente anche:
+## Installation
 
-- `Copernicus/ERA5-monthly/era5-land-vegetation`
-- `Land/Europe_ndvi_monthly_un_025.csv`
-- `Agriculture/Europe_combined_agriculture_data.csv`
-- `Forest/Europe_forest_data.csv`
+Clone the repository and create an isolated Python environment:
 
-La mappatura attuale distingue due modalita operative:
+```bash
+git clone https://github.com/ShimOne420/tesi_bioanalyst_repo.git
+cd tesi_bioanalyst_repo
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements-dev.txt
+```
 
-- `--input-mode clean`: usa solo i gruppi core reali e lascia `vegetation`, `agriculture`, `forest` a zero per fare un test pulito.
-- `--input-mode all`: aggiunge `agriculture`, `forest` e `vegetation`; quest'ultima usa il CSV NDVI ufficiale se presente, altrimenti una proxy dichiarata da `lai_hv + lai_lv`.
+On Windows PowerShell:
 
-`redlist` e `misc` restano placeholder a zero. Il manifest del run dichiara sempre quali gruppi sono reali, proxy o placeholder.
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements-dev.txt
+```
 
-## Script Principali
+Install the dashboard dependencies:
 
-- [scripts/bioanalyst_native_utils.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/bioanalyst_native_utils.py)
-- [scripts/forecast_native_one_step.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/forecast_native_one_step.py)
-- [scripts/forecast_native_rollout.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/forecast_native_rollout.py)
-- [scripts/inspect_native_outputs.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/inspect_native_outputs.py)
-- [scripts/plot_native_maps.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/plot_native_maps.py)
-- [scripts/validate_native_predictions.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/validate_native_predictions.py)
+```bash
+cd web-ui
+npm ci
+cd ..
+```
 
-Gli script BIOMAP restano disponibili, ma vengono dopo:
+## Configuration
 
-- [scripts/native_to_biomap.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/native_to_biomap.py)
-- [scripts/validate_native_biomap.py](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/scripts/validate_native_biomap.py)
+Copy the environment templates:
 
-## Comandi Base
+```bash
+cp .env.example .env
+cp web-ui/.env.local.example web-ui/.env.local
+```
+
+Set the local paths in `.env`. The most important variables are:
+
+| Variable | Description |
+| --- | --- |
+| `BIOCUBE_DIR` | Root directory of the local BioCube dataset. |
+| `BIOANALYST_MODEL_DIR` | Local checkout or installation directory of the BioAnalyst model. |
+| `PROJECT_OUTPUT_DIR` | Destination for generated outputs. |
+
+Never commit `.env`, `.env.local`, datasets, checkpoints, or generated outputs. The repository already ignores these files.
+
+See [the model guide](models/README.md), [the macOS setup guide](docs/SETUP_MAC_VSCODE.md), and [the Windows CUDA setup guide](docs/SETUP_WINDOWS_CUDA.md) for machine-specific details.
+
+## Data
+
+BioMAP expects BioCube sources to be stored locally under `BIOCUBE_DIR`. The exact available variables can differ between installations. Before running an analysis, inspect the configured sources:
+
+```bash
+python scripts/check_project_setup.py
+python scripts/inventory_biocube.py
+python scripts/view_minimum_sources.py --source all --rows 3
+```
+
+Large source files are intentionally excluded from this repository. Small catalogs under `data/` define supported European cities and validation cases.
+
+## Observed indicator workflow
+
+List the available cities:
+
+```bash
+python scripts/selected_area_indicators.py --list-cities
+```
+
+Run an observed analysis for a city:
+
+```bash
+python scripts/selected_area_indicators.py \
+  --city madrid \
+  --start 2019-01-01 \
+  --end 2019-12-01
+```
+
+Run the same workflow for a custom bounding box:
+
+```bash
+python scripts/selected_area_indicators.py \
+  --min-lat 40 \
+  --max-lat 41 \
+  --min-lon -4 \
+  --max-lon -3 \
+  --start 2019-01-01 \
+  --end 2019-12-01
+```
+
+Outputs are written below `PROJECT_OUTPUT_DIR` and include machine-readable metadata describing the selected area, period, sources, units, and indicator semantics.
+
+## Native BioAnalyst workflow
+
+The forecast path follows the upstream model's native batch structure before converting results into BioMAP products. This separation makes model behavior easier to audit.
+
+Activate the model environment:
 
 ```bash
 source scripts/activate_bioanalyst_model.sh
-python scripts/check_project_setup.py
-python -m py_compile scripts/bioanalyst_model_utils.py scripts/bioanalyst_native_utils.py scripts/forecast_native_one_step.py scripts/forecast_native_rollout.py scripts/inspect_native_outputs.py scripts/export_native_output.py scripts/plot_native_maps.py scripts/validate_native_predictions.py scripts/native_to_biomap.py scripts/validate_native_biomap.py
 ```
 
-One-step nativo:
+Run native one-step inference:
 
 ```bash
-python scripts/forecast_native_one_step.py --city madrid --start 2019-11-01 --end 2019-12-01 --checkpoint small --device cpu
+python scripts/forecast_native_one_step.py \
+  --city madrid \
+  --start 2019-11-01 \
+  --end 2019-12-01 \
+  --checkpoint small \
+  --device cpu
 ```
 
-Rollout nativo:
+Run a six-step rollout:
 
 ```bash
-python scripts/forecast_native_rollout.py --city milano --start 2019-01-01 --end 2019-12-01 --checkpoint small --device cpu --steps 6
+python scripts/forecast_native_rollout.py \
+  --city madrid \
+  --start 2019-11-01 \
+  --end 2019-12-01 \
+  --checkpoint small \
+  --device cuda \
+  --steps 6
 ```
 
-Ispezione output:
+The higher-level runners combine inference, exports, plots, and optional cache publication:
 
 ```bash
-python scripts/inspect_native_outputs.py --run-dir outputs/local_preview/model_forecast/madrid_2019_12_native_one_step --group climate --variable t2m
+python scripts/run.py --help
+python scripts/run_rollout.py --help
 ```
 
-Excel dell'output `.pt` nativo:
+Input modes are explicit:
+
+- `clean` uses the core real-valued groups and leaves optional groups at zero.
+- `all` also loads vegetation, agriculture, and forest sources when available.
+
+Each run manifest records whether a group came from real data, a declared proxy, or a zero placeholder.
+
+## Validation and exports
+
+Inspect a native output:
 
 ```bash
-python scripts/export_native_output.py --run-dir outputs/local_preview/model_forecast/madrid_2019_12_native_one_step --batch-kind prediction --group climate --variable t2m
+python scripts/inspect_native_outputs.py \
+  --run-dir outputs/local_preview/model_forecast/your_run \
+  --group climate \
+  --variable t2m
 ```
 
-Run + export completo dei valori nativi:
+Create prediction and difference maps:
 
 ```bash
-python scripts/run.py --label Europe_native_large_all_2019_06 --min-lat 32.0 --max-lat 72.0 --min-lon -25.0 --max-lon 45.0 --start 2019-04-01 --end 2019-05-01 --checkpoint large --device cuda --input-mode all --group climate --variable t2m --export-native-full --export-native-group-csvs --no-history
+python scripts/plot_native_maps.py \
+  --run-dir outputs/local_preview/model_forecast/your_run \
+  --group climate \
+  --variable t2m \
+  --difference
 ```
 
-Mappa della temperatura:
+Run a local validation matrix:
 
 ```bash
-python scripts/plot_native_maps.py --run-dir outputs/local_preview/model_forecast/madrid_2019_12_native_one_step --group climate --variable t2m
-python scripts/plot_native_maps.py --run-dir outputs/local_preview/model_forecast/madrid_2019_12_native_one_step --group climate --variable t2m --difference
+python scripts/validate_native_predictions.py \
+  --cases-json data/native_validation_cases_local.json \
+  --checkpoint small \
+  --device cpu
 ```
 
-Benchmark nativo multi-caso:
+Convert a native run into BioMAP outputs:
 
 ```bash
-python scripts/validate_native_predictions.py --cases-json data/native_validation_cases_local.json --checkpoint small --device cpu
+python scripts/native_to_biomap.py \
+  --run-dir outputs/local_preview/model_forecast/your_run
 ```
 
-Benchmark CUDA pronto per 15 citta x 4 stagioni:
+For methodology and output interpretation, read:
+
+- [Native BioAnalyst outputs](docs/OUTPUT_NATIVI_BIOANALYST.md)
+- [Dataset-to-model mapping](docs/MATRICE_DATASET_BIOANALYST.md)
+- [Observed frontend workflow](docs/README_FRONTEND_OSSERVATIVO.md)
+- [Forecast frontend workflow](docs/README_OPERATIVO_FRONTEND_FORECAST.md)
+- [Multi-step rollout report](docs/REPORT_ROLLOUT_MULTISTEP_PIPELINE_PREVISIONALE.md)
+
+## API and dashboard
+
+Start the backend from the repository root:
 
 ```bash
-python scripts/validate_native_predictions.py --cases-json data/native_validation_cases_cuda_15cities_template.json --checkpoint small --device cuda
+uvicorn backend_api.main:app --reload --port 8000
 ```
 
-Export BIOMAP minimo dal run nativo:
+Start the frontend in another terminal:
 
 ```bash
-python scripts/native_to_biomap.py --run-dir outputs/local_preview/model_forecast/milan_2019_12_native_one_step
+cd web-ui
+npm run dev
 ```
 
-## Output Attesi
+Open `http://localhost:3000`. The frontend forwards requests to the local backend and exposes observed or cached forecast results depending on the selected workflow.
 
-Ogni run salva:
+## Quality checks
 
-- `forecast_native_manifest.json`
-- `forecast_native_config.yaml`
-- batch nativi `.pt` del forecast
-- target osservato raw, se disponibile
-- `native_inspection_summary.json` quando usi lo script di ispezione
-- `.png` delle mappe quando usi lo script di plotting
-- workbook di benchmark nativo in `native_prediction_validation_.../native_prediction_validation.xlsx`
-- export BIOMAP minimale in `run_dir/biomap` solo se lanci gli script BIOMAP
-
-Questi artefatti sono il punto di arrivo della replica native-first. Solo dopo entra lo strato BIOMAP.
-
-## Workflow Minimo Da Ripetere Sul Mac
+Run the Python checks:
 
 ```bash
-source scripts/activate_bioanalyst_model.sh
-python scripts/check_project_setup.py
-python scripts/forecast_native_one_step.py --city madrid --start 2019-11-01 --end 2019-12-01 --checkpoint small --device cpu
-python scripts/inspect_native_outputs.py --run-dir outputs/local_preview/model_forecast/madrid_2019_12_native_one_step --group climate --variable t2m
-python scripts/plot_native_maps.py --run-dir outputs/local_preview/model_forecast/madrid_2019_12_native_one_step --group climate --variable t2m
-python scripts/plot_native_maps.py --run-dir outputs/local_preview/model_forecast/madrid_2019_12_native_one_step --group climate --variable t2m --difference
-python scripts/validate_native_predictions.py --cases-json data/native_validation_cases_local.json --checkpoint small --device cpu
+ruff check backend_api scripts test_*.py
+python -m compileall -q backend_api scripts
+pytest
 ```
 
-## Guide Utili
+Run the frontend checks:
 
-- [Output nativi BioAnalyst](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/docs/OUTPUT_NATIVI_BIOANALYST.md)
-- [Matrice dataset BioAnalyst](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/docs/MATRICE_DATASET_BIOANALYST.md)
-- [Workflow universita Windows CUDA](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/docs/WORKFLOW_UNIVERSITA_WINDOWS_CUDA.md)
-- [Setup Windows con GPU NVIDIA](/Users/simonemercolino/Desktop/Università/Tesi_BioMap/TCBiomap/tesi_bioanalyst_repo_native/docs/SETUP_WINDOWS_CUDA.md)
+```bash
+cd web-ui
+npm run check
+```
+
+Some model-oriented tests import PyTorch and the external BioAnalyst code. Run them inside the configured model environment.
+
+## Reproducibility rules
+
+- Keep all machine-specific paths in environment files.
+- Use `npm ci` to reproduce the locked frontend dependency tree.
+- Record the checkpoint, input mode, bounds, dates, and source availability for every forecast.
+- Treat generated manifests as part of the scientific audit trail.
+- Do not substitute missing data silently; declare proxies and placeholders.
+- Do not commit local caches, virtual environments, model weights, or outputs.
+
+## Known limitations
+
+- Forecast quality depends on the checkpoint, geographic domain, input coverage, and rollout horizon.
+- A technically successful inference is not evidence of ecological validity.
+- Optional BioCube variables may have different temporal coverage.
+- Multi-step autoregressive forecasts accumulate uncertainty.
+- Full-resolution model runs can require substantial GPU memory.
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes. Keep commits focused, document new environment variables and outputs, and run the checks relevant to the modified pipeline.
+
+## License and research use
+
+No standalone license is currently declared in this repository. Before redistribution or production use, verify the licenses of BioCube, BioAnalyst, upstream datasets, and all external model assets.
