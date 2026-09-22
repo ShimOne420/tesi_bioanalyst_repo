@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0",
+  "model": {
+    "repository": "https://github.com/ucam-eo/tessera",
+    "repository_commit": "PIN_BEFORE_TRAINING",
+    "family": "TESSERA v1.1 MPC",
+    "code_dir": "tessera_infer_QAT",
+    "checkpoint_kind": "full",
+    "data_source": "mpc"
+  },
+  "tasks": {
+    "bii": {
+      "display_name": "Biodiversity Intactness Index",
+      "target_path": "REQUIRED_OFFICIAL_BII_RASTER",
+      "target_year": "REQUIRED",
+      "target_version": "REQUIRED",
+      "license": "REQUIRED",
+      "source_url": "REQUIRED",
+      "unit": "proportion relative to reference state",
+      "valid_range": [0.0, 1.0]
+    },
+    "msa_globio4": {
+      "display_name": "Mean Species Abundance GLOBIO 4",
+      "target_path": "REQUIRED_OFFICIAL_GLOBIO4_MSA_RASTER",
+      "target_year": "REQUIRED",
+      "target_version": "REQUIRED",
+      "license": "REQUIRED",
+      "source_url": "REQUIRED",
+      "unit": "proportion relative to undisturbed reference",
+      "valid_range": [0.0, 1.0]
+    }
+  }
+}
